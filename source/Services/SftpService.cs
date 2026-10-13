@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using Renci.SshNet;
 using Renci.SshNet.Common;
@@ -13,6 +15,9 @@ public sealed class SftpService : IDisposable
 
     private SftpClient? _client;
     private byte[]? _lastHostKey;
+    private readonly Dictionary<int, string> _uidCache = new();
+    private readonly object _uidCacheLock = new();
+    private AppSettings? _settings;
 
     public bool IsConnected
     {
@@ -35,6 +40,7 @@ public sealed class SftpService : IDisposable
 
         _client = new SftpClient(info);
         _lastHostKey = null;
+        _settings = settings;
 
         _client.HostKeyReceived += (_, e) =>
         {
@@ -70,6 +76,7 @@ public sealed class SftpService : IDisposable
         EnsureConnected();
 
         List<RemoteEntry> items = new List<RemoteEntry>();
+        HashSet<int> uidsToResolve = new();
 
         foreach (SftpFile file in _client!.ListDirectory(path))
         {
@@ -77,6 +84,8 @@ public sealed class SftpService : IDisposable
             {
                 continue;
             }
+
+            uidsToResolve.Add(file.UserId);
 
             RemoteEntry entry = new RemoteEntry
             {
@@ -91,6 +100,16 @@ public sealed class SftpService : IDisposable
             };
 
             items.Add(entry);
+        }
+
+        // Resolve UIDs to usernames
+        Dictionary<int, string> resolved = ResolveUids(uidsToResolve);
+        foreach (RemoteEntry entry in items)
+        {
+            if (resolved.TryGetValue(int.Parse(entry.Owner), out string? name))
+            {
+                entry.Owner = name;
+            }
         }
 
         return items
@@ -140,6 +159,9 @@ public sealed class SftpService : IDisposable
     {
         EnsureConnected();
 
+        HashSet<int> uidsToResolve = new();
+        List<RemoteEntry> batch = new List<RemoteEntry>();
+
         foreach (SftpFile file in _client!.ListDirectory(directory))
         {
             if (file.Name == "." || file.Name == "..")
@@ -153,7 +175,8 @@ public sealed class SftpService : IDisposable
             }
             else
             {
-                RemoteEntry entry = new RemoteEntry
+                uidsToResolve.Add(file.UserId);
+                batch.Add(new RemoteEntry
                 {
                     Name = file.Name,
                     FullPath = file.FullName,
@@ -163,15 +186,27 @@ public sealed class SftpService : IDisposable
                     Permissions = FormatPermissions(file.Attributes),
                     LastModified = file.LastWriteTime,
                     Created = file.LastAccessTime
-                };
-
-                output.Add(entry);
+                });
             }
+        }
+
+        Dictionary<int, string> resolved = ResolveUids(uidsToResolve);
+        foreach (RemoteEntry entry in batch)
+        {
+            if (resolved.TryGetValue(int.Parse(entry.Owner), out string? name))
+            {
+                entry.Owner = name;
+            }
+
+            output.Add(entry);
         }
     }
 
     private static void WalkWithClient(SftpClient client, string directory, List<RemoteEntry> output)
     {
+        HashSet<int> uidsToResolve = new();
+        List<RemoteEntry> batch = new List<RemoteEntry>();
+
         foreach (SftpFile file in client.ListDirectory(directory))
         {
             if (file.Name == "." || file.Name == "..")
@@ -185,7 +220,8 @@ public sealed class SftpService : IDisposable
             }
             else
             {
-                RemoteEntry entry = new RemoteEntry
+                uidsToResolve.Add(file.UserId);
+                batch.Add(new RemoteEntry
                 {
                     Name = file.Name,
                     FullPath = file.FullName,
@@ -195,10 +231,14 @@ public sealed class SftpService : IDisposable
                     Permissions = FormatPermissions(file.Attributes),
                     LastModified = file.LastWriteTime,
                     Created = file.LastAccessTime
-                };
-
-                output.Add(entry);
+                });
             }
+        }
+
+        // Resolve UIDs to usernames (best effort, no SSH client available here)
+        foreach (RemoteEntry entry in batch)
+        {
+            output.Add(entry);
         }
     }
 
@@ -366,6 +406,69 @@ public sealed class SftpService : IDisposable
         result += attributes.OthersCanRead ? "r" : "-";
         result += attributes.OthersCanWrite ? "w" : "-";
         result += attributes.OthersCanExecute ? "x" : "-";
+
+        return result;
+    }
+
+    private Dictionary<int, string> ResolveUids(ICollection<int> uids)
+    {
+        Dictionary<int, string> result = new();
+
+        lock (_uidCacheLock)
+        {
+            foreach (int uid in uids)
+            {
+                if (_uidCache.TryGetValue(uid, out string? cached))
+                {
+                    result[uid] = cached;
+                }
+            }
+        }
+
+        List<int> missing = uids
+            .Where(uid => !result.ContainsKey(uid))
+            .ToList();
+
+        if (missing.Count == 0 || _settings == null)
+        {
+            return result;
+        }
+
+        // Build a single shell command: id -un 1000; id -un 1001; ...
+        string command = string.Join(";", missing.Select(uid => $"id -un {uid}"));
+
+        try
+        {
+            AuthenticationMethod auth = new PasswordAuthenticationMethod(_settings.Username, _settings.Password);
+            ConnectionInfo info = new ConnectionInfo(_settings.Host, _settings.Port, _settings.Username, auth)
+            {
+                Timeout = TimeSpan.FromSeconds(10)
+            };
+
+            using (SshClient ssh = new SshClient(info))
+            {
+                ssh.Connect();
+                using (var response = ssh.RunCommand(command))
+                {
+                    string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+                    for (int i = 0; i < missing.Count && i < lines.Length; i++)
+                    {
+                        string name = lines[i].Trim();
+                        result[missing[i]] = name;
+
+                        lock (_uidCacheLock)
+                        {
+                            _uidCache[missing[i]] = name;
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // If SSH is not available or the command fails, keep the numeric UID.
+        }
 
         return result;
     }

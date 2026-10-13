@@ -6,3 +6,16 @@ source/bin/
 source/obj/
 BackupToRemote.bat
 Cleanup.bat
+.dotnet_home
+.dotnet-cli
+.dotnet-home
+.icon_test
+.inspect
+.nuget
+.nuget-packages
+build
+current_session_context
+Microsoft
+source/NuGet
+.icon_test.cs
+.tmp-inspect.cs
