@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -68,6 +69,15 @@ public class MainViewModel : ViewModelBase
         RemoveDownloadCommand = new RelayCommand((object? parameter) => { if (parameter is DownloadItemViewModel download) { RemoveDownload(download); } });
         NewFolderCommand = new RelayCommand((object? parameter) => { if (parameter is LocalItemViewModel localItem) { NewFolder(localItem); } });
         DeleteLocalItemCommand = new RelayCommand((object? parameter) => { if (parameter is LocalItemViewModel localItem) { DeleteLocalItem(localItem); } });
+        UploadCommand = new RelayCommand(
+            (object? parameter) => { if (parameter is RemoteItemViewModel remoteItem) { UploadToRemote(remoteItem); } },
+            (object? parameter) => _sftp.IsConnected);
+        NewRemoteFolderCommand = new RelayCommand(
+            (object? parameter) => { if (parameter is RemoteItemViewModel remoteItem) { NewRemoteFolder(remoteItem); } },
+            (object? parameter) => _sftp.IsConnected);
+        DeleteRemoteItemCommand = new RelayCommand(
+            (object? parameter) => { if (parameter is RemoteItemViewModel remoteItem) { DeleteRemoteItem(remoteItem); } },
+            (object? parameter) => _sftp.IsConnected);
 
         LoadLocalDrives();
 
@@ -96,6 +106,9 @@ public class MainViewModel : ViewModelBase
     public RelayCommand RemoveDownloadCommand { get; }
     public RelayCommand NewFolderCommand { get; }
     public RelayCommand DeleteLocalItemCommand { get; }
+    public RelayCommand UploadCommand { get; }
+    public RelayCommand NewRemoteFolderCommand { get; }
+    public RelayCommand DeleteRemoteItemCommand { get; }
 
     public ObservableCollection<DownloadItemViewModel> Downloads { get; }
     public ObservableCollection<LocalItemViewModel> LocalRoots { get; }
@@ -1052,6 +1065,155 @@ public class MainViewModel : ViewModelBase
         SaveQueue();
     }
 
+    public void OnLocalMouseDown(LocalItemViewModel item, ModifierKeys modifiers)
+    {
+        if (modifiers.HasFlag(ModifierKeys.Control))
+        {
+            item.IsHighlighted = !item.IsHighlighted;
+        }
+        else if (modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            // For local items, shift-select is less critical; just highlight
+            item.IsHighlighted = true;
+        }
+        else
+        {
+            bool wasHighlighted = item.IsHighlighted;
+            ClearLocalHighlight();
+
+            if (!wasHighlighted || GetHighlightedLocalItems().Count == 0)
+            {
+                item.IsHighlighted = true;
+            }
+        }
+    }
+
+    private void ClearLocalHighlight()
+    {
+        foreach (LocalItemViewModel root in LocalRoots)
+        {
+            SetLocalHighlight(root, false);
+        }
+    }
+
+    private void SetLocalHighlight(LocalItemViewModel item, bool value)
+    {
+        item.IsHighlighted = value;
+
+        foreach (LocalItemViewModel child in item.Children)
+        {
+            SetLocalHighlight(child, value);
+        }
+    }
+
+    private List<LocalItemViewModel> FlattenLocalVisible()
+    {
+        List<LocalItemViewModel> flattened = new List<LocalItemViewModel>();
+
+        foreach (LocalItemViewModel root in LocalRoots)
+        {
+            FlattenLocal(root, flattened);
+        }
+
+        return flattened;
+    }
+
+    private void FlattenLocal(LocalItemViewModel item, List<LocalItemViewModel> output)
+    {
+        output.Add(item);
+
+        foreach (LocalItemViewModel child in item.Children)
+        {
+            FlattenLocal(child, output);
+        }
+    }
+
+    public List<LocalItemViewModel> GetHighlightedLocalItems()
+    {
+        return FlattenLocalVisible().Where(x => x.IsHighlighted).ToList();
+    }
+
+    public void HandleLocalDrop(List<LocalItemViewModel> items, RemoteItemViewModel? target)
+    {
+        RemoteItemViewModel? directory = target?.IsDirectory == true ? target : target?.Parent;
+
+        if (directory == null)
+        {
+            _dialogs.ShowInformation("Upload", "Drop the items on a remote folder.");
+            return;
+        }
+
+        foreach (LocalItemViewModel item in items)
+        {
+            if (item.IsDirectory)
+            {
+                // For directories, scan local files and upload each
+                UploadLocalDirectory(item, directory);
+            }
+            else
+            {
+                string remotePath = directory.FullPath == "/" ? "/" + item.Name : directory.FullPath + "/" + item.Name;
+
+                DownloadEntry entry = new DownloadEntry
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    FileName = item.Name,
+                    RemotePath = remotePath,
+                    LocalPath = item.FullPath,
+                    TotalLength = item.Size,
+                    Direction = TransferDirection.Upload
+                };
+
+                DownloadItemViewModel itemVm = new DownloadItemViewModel(entry);
+                Downloads.Add(itemVm);
+                StartUpload(entry, itemVm, item.FullPath, remotePath);
+            }
+        }
+
+        OnPropertyChanged(nameof(QueueCountDisplay));
+        OnPropertyChanged(nameof(TotalSizeDisplay));
+        SaveQueue();
+    }
+
+    private void UploadLocalDirectory(LocalItemViewModel directory, RemoteItemViewModel target)
+    {
+        try
+        {
+            string[] files = Directory.GetFiles(directory.FullPath);
+
+            string remoteDir = target.FullPath == "/" ? "/" + directory.Name : target.FullPath + "/" + directory.Name;
+            _sftp.CreateDirectory(remoteDir);
+
+            foreach (string file in files)
+            {
+                string fileName = Path.GetFileName(file);
+                string remotePath = remoteDir == "/" ? "/" + fileName : remoteDir + "/" + fileName;
+                long fileSize = new FileInfo(file).Length;
+
+                DownloadEntry entry = new DownloadEntry
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    FileName = fileName,
+                    RemotePath = remotePath,
+                    LocalPath = file,
+                    TotalLength = fileSize,
+                    Direction = TransferDirection.Upload
+                };
+
+                DownloadItemViewModel itemVm = new DownloadItemViewModel(entry);
+                Downloads.Add(itemVm);
+                StartUpload(entry, itemVm, file, remotePath);
+            }
+
+            LogService.Info($"Uploaded directory contents: {directory.FullPath} -> {remoteDir}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"Upload directory failed: {ex}");
+            _dialogs.ShowError("Upload error", ex.Message);
+        }
+    }
+
     private DownloadItemViewModel AddScanningPlaceholder(RemoteItemViewModel directory, LocalItemViewModel target)
     {
         DownloadEntry entry = new DownloadEntry
@@ -1541,6 +1703,219 @@ public class MainViewModel : ViewModelBase
         {
             LogService.Error($"Delete failed: {ex}");
             _dialogs.ShowError("Delete error", ex.Message);
+        }
+    }
+
+    private void UploadToRemote(RemoteItemViewModel target)
+    {
+        RemoteItemViewModel? directory = target.IsDirectory ? target : target.Parent;
+
+        if (directory == null)
+        {
+            directory = target;
+        }
+
+        Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Upload file(s) to " + directory.Name,
+            Multiselect = true,
+            Filter = "All files (*.*)|*.*"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        foreach (string localPath in dialog.FileNames)
+        {
+            string fileName = Path.GetFileName(localPath);
+            string remotePath = directory.FullPath == "/" ? "/" + fileName : directory.FullPath + "/" + fileName;
+
+            DownloadEntry entry = new DownloadEntry
+            {
+                Id = Guid.NewGuid().ToString(),
+                FileName = fileName,
+                RemotePath = remotePath,
+                LocalPath = localPath,
+                TotalLength = new FileInfo(localPath).Length,
+                Direction = TransferDirection.Upload
+            };
+
+            DownloadItemViewModel itemVm = new DownloadItemViewModel(entry);
+            Downloads.Add(itemVm);
+            StartUpload(entry, itemVm, localPath, remotePath);
+        }
+    }
+
+    private void StartUpload(DownloadEntry entry, DownloadItemViewModel itemVm, string localPath, string remotePath)
+    {
+        CancellationTokenSource cts = new CancellationTokenSource();
+        _cancellationTokens[entry.Id] = cts;
+        _activeDownloadIds.Add(entry.Id);
+
+        itemVm.Status = "Active";
+
+        long lastReported = 0;
+        DateTime lastUpdate = DateTime.UtcNow;
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                await _sftp.UploadFileAsync(
+                    localPath,
+                    remotePath,
+                    progress =>
+                    {
+                        long delta = progress - lastReported;
+                        DateTime now = DateTime.UtcNow;
+
+                        if (now - lastUpdate >= TimeSpan.FromMilliseconds(200) || delta > 0)
+                        {
+                            itemVm.CompletedLength = progress;
+                            double seconds = (now - lastUpdate).TotalSeconds;
+
+                            if (seconds > 0)
+                            {
+                                itemVm.DownloadSpeed = (long)(delta / seconds);
+                            }
+
+                            lastReported = progress;
+                            lastUpdate = now;
+                            itemVm.RefreshProgress();
+                        }
+                    },
+                    cts.Token);
+
+                itemVm.Status = "Complete";
+                LogService.Info($"Upload complete: {localPath} -> {remotePath}");
+            }
+            catch (OperationCanceledException)
+            {
+                itemVm.Status = "Paused";
+                LogService.Info($"Upload paused: {localPath}");
+            }
+            catch (Exception ex)
+            {
+                itemVm.Status = "Failed";
+                itemVm.ErrorMessage = ex.Message;
+                LogService.Error($"Upload failed: {ex}");
+            }
+            finally
+            {
+                _activeDownloadIds.Remove(entry.Id);
+                _cancellationTokens.Remove(entry.Id);
+            }
+        }, cts.Token);
+    }
+
+    private void NewRemoteFolder(RemoteItemViewModel target)
+    {
+        RemoteItemViewModel? parent = target.IsDirectory ? target : target.Parent;
+
+        if (parent == null)
+        {
+            parent = target;
+        }
+
+        string? name = _dialogs.PromptText("New remote folder", "Folder name:", "New folder");
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        string remotePath = parent.FullPath == "/" ? "/" + name : parent.FullPath + "/" + name;
+
+        try
+        {
+            _sftp.CreateDirectory(remotePath);
+
+            if (parent.ChildrenLoaded)
+            {
+                List<RemoteEntry> entries = _sftp.ListDirectory(parent.FullPath);
+                RemoteEntry? newEntry = entries.FirstOrDefault(e => e.FullPath == remotePath);
+
+                if (newEntry != null)
+                {
+                    parent.Children.Insert(0, new RemoteItemViewModel(newEntry, parent));
+                }
+                else
+                {
+                    RefreshRemoteChildren(parent);
+                }
+            }
+            else
+            {
+                parent.IsExpanded = true;
+            }
+
+            LogService.Info($"Created remote directory: {remotePath}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"Create remote directory failed: {ex}");
+            _dialogs.ShowError("Error", ex.Message);
+        }
+    }
+
+    private void DeleteRemoteItem(RemoteItemViewModel item)
+    {
+        string message;
+
+        if (item.IsDirectory)
+        {
+            message = $"Delete remote directory '{item.Name}' and all of its contents?";
+        }
+        else
+        {
+            message = $"Delete remote file '{item.Name}'?";
+        }
+
+        if (!_dialogs.Confirm("Confirm delete", message))
+        {
+            return;
+        }
+
+        try
+        {
+            _sftp.DeleteDirectory(item.FullPath);
+
+            RemoteItemViewModel? parent = item.Parent;
+
+            if (parent != null)
+            {
+                parent.Children.Remove(item);
+            }
+
+            LogService.Info($"Deleted remote item: {item.FullPath}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"Delete remote item failed: {ex}");
+            _dialogs.ShowError("Delete error", ex.Message);
+        }
+    }
+
+    private void RefreshRemoteChildren(RemoteItemViewModel item)
+    {
+        try
+        {
+            List<RemoteEntry> children = _sftp.ListDirectory(item.FullPath);
+            item.Children.Clear();
+
+            foreach (RemoteEntry child in children)
+            {
+                item.Children.Add(new RemoteItemViewModel(child, item));
+            }
+
+            item.ChildrenLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            LogService.Error($"Failed to refresh {item.FullPath}: {ex}");
+            _dialogs.ShowError("Error", ex.Message);
         }
     }
 

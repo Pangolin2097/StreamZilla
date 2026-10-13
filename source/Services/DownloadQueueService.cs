@@ -35,7 +35,8 @@ public static class DownloadQueueService
                     LocalPath = x.LocalPath,
                     TotalLength = x.TotalLength,
                     CompletedLength = x.CompletedLength,
-                    ChunkBytes = x.ChunkBytes
+                    ChunkBytes = x.ChunkBytes,
+                    Direction = x.Direction
                 })
                 .ToList();
 
@@ -88,7 +89,8 @@ public static class DownloadQueueService
                     LocalPath = queueEntry.LocalPath,
                     TotalLength = queueEntry.TotalLength,
                     ChunkBytes = queueEntry.ChunkBytes ?? Array.Empty<long>(),
-                    Status = "Paused"
+                    Status = "Paused",
+                    Direction = queueEntry.Direction
                 };
 
                 result.Add(entry);

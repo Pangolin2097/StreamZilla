@@ -8,6 +8,7 @@ public class LocalItemViewModel : ViewModelBase
     private readonly LocalEntry _entry;
     private bool _isExpanded;
     private bool _childrenLoaded;
+    private bool _isHighlighted;
 
     public LocalItemViewModel(LocalEntry entry, LocalItemViewModel? parent = null)
     {
@@ -137,6 +138,18 @@ public class LocalItemViewModel : ViewModelBase
             }
 
             return FileIconHelper.FormatSize(Size);
+        }
+    }
+
+    public bool IsHighlighted
+    {
+        get
+        {
+            return _isHighlighted;
+        }
+        set
+        {
+            SetProperty(ref _isHighlighted, value);
         }
     }
 }

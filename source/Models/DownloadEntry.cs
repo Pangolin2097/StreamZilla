@@ -14,6 +14,7 @@ public class DownloadEntry
     public long TotalLength { get; set; }
     public string Status { get; set; } = "Queued";
     public string ErrorMessage { get; set; } = "";
+    public TransferDirection Direction { get; set; } = TransferDirection.Download;
 
     public long[] ChunkBytes { get; set; } = Array.Empty<long>();
 
@@ -24,6 +25,13 @@ public class DownloadEntry
             lock (_chunkLock)
             {
                 return _completedLength;
+            }
+        }
+        set
+        {
+            lock (_chunkLock)
+            {
+                _completedLength = Math.Max(0, Math.Min(value, TotalLength));
             }
         }
     }

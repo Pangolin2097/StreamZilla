@@ -58,6 +58,48 @@ public class RemoteItemViewModel : ViewModelBase
         }
     }
 
+    public string Owner
+    {
+        get
+        {
+            return _entry.Owner;
+        }
+    }
+
+    public string Permissions
+    {
+        get
+        {
+            return _entry.Permissions;
+        }
+    }
+
+    public string ModifiedDisplay
+    {
+        get
+        {
+            if (_entry.LastModified == null)
+            {
+                return "";
+            }
+
+            return _entry.LastModified.Value.ToLocalTime().ToString("g");
+        }
+    }
+
+    public string CreatedDisplay
+    {
+        get
+        {
+            if (_entry.Created == null)
+            {
+                return "";
+            }
+
+            return _entry.Created.Value.ToLocalTime().ToString("g");
+        }
+    }
+
     public bool IsHighlighted
     {
         get

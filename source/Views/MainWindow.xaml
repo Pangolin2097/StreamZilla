@@ -17,6 +17,15 @@
                       CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
         </ContextMenu>
 
+        <ContextMenu x:Key="RemoteItemMenu">
+            <MenuItem Header="New folder"
+                      Command="{Binding PlacementTarget.Tag.NewRemoteFolderCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                      CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+            <MenuItem Header="Delete"
+                      Command="{Binding PlacementTarget.Tag.DeleteRemoteItemCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                      CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+        </ContextMenu>
+
         <Style x:Key="ExpanderToggleStyle" TargetType="ToggleButton">
             <Setter Property="Focusable" Value="False"/>
             <Setter Property="Width" Value="16"/>
@@ -88,6 +97,7 @@
         <Style x:Key="RemoteItemStyle" TargetType="TreeViewItem">
             <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
             <Setter Property="Tag" Value="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}"/>
+            <Setter Property="ContextMenu" Value="{StaticResource RemoteItemMenu}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TreeViewItem">
@@ -187,6 +197,8 @@
                           AllowDrop="True"
                           Drop="LocalTree_Drop"
                           DragOver="LocalTree_DragOver"
+                          PreviewMouseLeftButtonDown="LocalTree_MouseDown"
+                          MouseMove="LocalTree_MouseMove"
                           PreviewKeyDown="LocalTree_PreviewKeyDown"
                           SelectedItemChanged="LocalTree_SelectedItemChanged">
                     <TreeView.ItemTemplate>
@@ -209,24 +221,59 @@
                 <TreeView x:Name="RemoteTree"
                           ItemsSource="{Binding RemoteRoots}"
                           ItemContainerStyle="{StaticResource RemoteItemStyle}"
+                          AllowDrop="True"
+                          Drop="RemoteTree_Drop"
+                          DragOver="RemoteTree_DragOver"
                           PreviewMouseLeftButtonDown="RemoteTree_MouseDown"
                           MouseMove="RemoteTree_MouseMove"
                           SelectedItemChanged="RemoteTree_SelectedItemChanged">
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="{Binding Icon}"
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="60"/>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="80"/>
+                                    <ColumnDefinition Width="80"/>
+                                    <ColumnDefinition Width="70"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="{Binding Icon}"
                                            FontFamily="Segoe MDL2 Assets"
                                            Foreground="{Binding IconBrush}"
                                            Margin="0,0,6,0"
                                            VerticalAlignment="Center"/>
-                                <TextBlock Text="{Binding Name}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="{Binding SizeDisplay}"
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding Name}"
+                                           VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="2"
+                                           Text="{Binding Owner}"
                                            Foreground="Gray"
-                                           Margin="0,0,8,0"
+                                           VerticalAlignment="Center"
+                                           ToolTip="Owner"/>
+                                <TextBlock Grid.Column="3"
+                                           Text="{Binding Permissions}"
+                                           Foreground="Gray"
+                                           VerticalAlignment="Center"
+                                           ToolTip="Permissions"/>
+                                <TextBlock Grid.Column="4"
+                                           Text="{Binding ModifiedDisplay}"
+                                           Foreground="Gray"
+                                           VerticalAlignment="Center"
+                                           ToolTip="Modified"/>
+                                <TextBlock Grid.Column="5"
+                                           Text="{Binding CreatedDisplay}"
+                                           Foreground="Gray"
+                                           VerticalAlignment="Center"
+                                           ToolTip="Created"/>
+                                <TextBlock Grid.Column="6"
+                                           Text="{Binding SizeDisplay}"
+                                           Foreground="Gray"
                                            VerticalAlignment="Center"
                                            ToolTip="Size"/>
-                            </StackPanel>
+                            </Grid>
                         </HierarchicalDataTemplate>
                     </TreeView.ItemTemplate>
                 </TreeView>
@@ -278,6 +325,7 @@
                           AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="File" Binding="{Binding FileName}" Width="*" IsReadOnly="True"/>
+                        <DataGridTextColumn Header="Direction" Binding="{Binding DirectionDisplay}" Width="80" IsReadOnly="True"/>
                         <DataGridTextColumn Header="Status" Binding="{Binding StatusDisplay}" Width="220" IsReadOnly="True"/>
                         <DataGridTemplateColumn Header="Progress" Width="240">
                             <DataGridTemplateColumn.CellTemplate>

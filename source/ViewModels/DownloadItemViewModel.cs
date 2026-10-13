@@ -110,6 +110,14 @@ public class DownloadItemViewModel : ViewModelBase
         }
     }
 
+    public string DirectionDisplay
+    {
+        get
+        {
+            return _entry.Direction == TransferDirection.Upload ? "Upload" : "Download";
+        }
+    }
+
     public string StatusDisplay
     {
         get
@@ -182,6 +190,13 @@ public class DownloadItemViewModel : ViewModelBase
         get
         {
             return _entry.CompletedLength;
+        }
+        set
+        {
+            _entry.CompletedLength = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ProgressPercent));
+            OnPropertyChanged(nameof(SizeDisplay));
         }
     }
 

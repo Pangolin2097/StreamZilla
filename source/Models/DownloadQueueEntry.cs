@@ -9,4 +9,5 @@ public class DownloadQueueEntry
     public long TotalLength { get; set; }
     public long CompletedLength { get; set; }
     public long[]? ChunkBytes { get; set; }
+    public TransferDirection Direction { get; set; } = TransferDirection.Download;
 }

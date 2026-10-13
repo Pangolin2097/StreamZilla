@@ -1,5 +1,7 @@
+using System.IO;
 using System.Security.Cryptography;
 using Renci.SshNet;
+using Renci.SshNet.Common;
 using Renci.SshNet.Sftp;
 using StreamZilla.Models;
 
@@ -7,6 +9,8 @@ namespace StreamZilla.Services;
 
 public sealed class SftpService : IDisposable
 {
+    public const string PermissionDeniedMessage = "Permission denied on the remote server.";
+
     private SftpClient? _client;
     private byte[]? _lastHostKey;
 
@@ -79,7 +83,11 @@ public sealed class SftpService : IDisposable
                 Name = file.Name,
                 FullPath = file.FullName,
                 IsDirectory = file.IsDirectory,
-                Size = file.Length
+                Size = file.Length,
+                Owner = file.UserId.ToString(),
+                Permissions = FormatPermissions(file.Attributes),
+                LastModified = file.LastWriteTime,
+                Created = file.LastAccessTime
             };
 
             items.Add(entry);
@@ -150,7 +158,11 @@ public sealed class SftpService : IDisposable
                     Name = file.Name,
                     FullPath = file.FullName,
                     IsDirectory = false,
-                    Size = file.Length
+                    Size = file.Length,
+                    Owner = file.UserId.ToString(),
+                    Permissions = FormatPermissions(file.Attributes),
+                    LastModified = file.LastWriteTime,
+                    Created = file.LastAccessTime
                 };
 
                 output.Add(entry);
@@ -178,12 +190,184 @@ public sealed class SftpService : IDisposable
                     Name = file.Name,
                     FullPath = file.FullName,
                     IsDirectory = false,
-                    Size = file.Length
+                    Size = file.Length,
+                    Owner = file.UserId.ToString(),
+                    Permissions = FormatPermissions(file.Attributes),
+                    LastModified = file.LastWriteTime,
+                    Created = file.LastAccessTime
                 };
 
                 output.Add(entry);
             }
         }
+    }
+
+    public Task UploadFileAsync(string localPath, string remotePath, Action<long>? progress = null, CancellationToken token = default)
+    {
+        return Task.Run(async () =>
+        {
+            EnsureConnected();
+
+            if (!File.Exists(localPath))
+            {
+                throw new FileNotFoundException("The local file does not exist.", localPath);
+            }
+
+            long totalLength = new FileInfo(localPath).Length;
+            string remoteDirectory = Path.GetDirectoryName(remotePath) ?? "/";
+
+            if (remoteDirectory.Length > 0 && !IsRemoteDirectory(remoteDirectory))
+            {
+                CreateDirectory(remoteDirectory);
+            }
+
+            token.ThrowIfCancellationRequested();
+
+            using (FileStream source = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                using (SftpFileStream destination = _client!.OpenWrite(remotePath))
+                {
+                    byte[] buffer = new byte[1024 * 1024];
+                    long written = 0;
+
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        int read = source.Read(buffer, 0, buffer.Length);
+
+                        if (read <= 0)
+                        {
+                            break;
+                        }
+
+                        destination.Write(buffer, 0, read);
+                        destination.Flush();
+                        written += read;
+                        progress?.Invoke(written);
+                    }
+                }
+            }
+
+            LogService.Info($"Uploaded file: {localPath} -> {remotePath} ({totalLength} bytes).");
+        }, token);
+    }
+
+    public void CreateDirectory(string remotePath)
+    {
+        EnsureConnected();
+
+        if (string.IsNullOrWhiteSpace(remotePath))
+        {
+            throw new ArgumentException("A remote directory path is required.", nameof(remotePath));
+        }
+
+        if (IsRemoteDirectory(remotePath))
+        {
+            return;
+        }
+
+        List<string> parts = remotePath
+            .Replace('\\', '/')
+            .Split('/')
+            .Where(x => x.Length > 0)
+            .ToList();
+
+        string current = "/";
+
+        foreach (string part in parts)
+        {
+            string candidate = current + part;
+
+            if (IsRemoteDirectory(candidate))
+            {
+                current = candidate;
+                continue;
+            }
+
+            _client!.CreateDirectory(candidate);
+            LogService.Info($"Created remote directory: {candidate}");
+            current = candidate;
+        }
+    }
+
+    public void DeleteFile(string remotePath)
+    {
+        EnsureConnected();
+
+        _client!.DeleteFile(remotePath);
+        LogService.Info($"Deleted remote file: {remotePath}");
+    }
+
+    public void DeleteDirectory(string remotePath)
+    {
+        EnsureConnected();
+
+        if (IsRemoteDirectory(remotePath))
+        {
+            DeleteDirectoryRecursive(remotePath);
+            return;
+        }
+
+        _client!.DeleteFile(remotePath);
+        LogService.Info($"Deleted remote file: {remotePath}");
+    }
+
+    public bool IsRemoteDirectory(string remotePath)
+    {
+        EnsureConnected();
+
+        try
+        {
+            // If we can list the path, it exists and is a directory.
+            _client!.ListDirectory(remotePath);
+            return true;
+        }
+        catch (SftpPathNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private void DeleteDirectoryRecursive(string remotePath)
+    {
+        EnsureConnected();
+
+        foreach (SftpFile child in _client!.ListDirectory(remotePath))
+        {
+            if (child.Name == "." || child.Name == "..")
+            {
+                continue;
+            }
+
+            if (child.IsDirectory)
+            {
+                DeleteDirectoryRecursive(child.FullName);
+            }
+            else
+            {
+                _client.DeleteFile(child.FullName);
+                LogService.Info($"Deleted remote file: {child.FullName}");
+            }
+        }
+
+        _client.DeleteDirectory(remotePath);
+        LogService.Info($"Deleted remote directory: {remotePath}");
+    }
+
+    private static string FormatPermissions(SftpFileAttributes attributes)
+    {
+        string result = attributes.IsDirectory ? "d" : "-";
+        result += attributes.OwnerCanRead ? "r" : "-";
+        result += attributes.OwnerCanWrite ? "w" : "-";
+        result += attributes.OwnerCanExecute ? "x" : "-";
+        result += attributes.GroupCanRead ? "r" : "-";
+        result += attributes.GroupCanWrite ? "w" : "-";
+        result += attributes.GroupCanExecute ? "x" : "-";
+        result += attributes.OthersCanRead ? "r" : "-";
+        result += attributes.OthersCanWrite ? "w" : "-";
+        result += attributes.OthersCanExecute ? "x" : "-";
+
+        return result;
     }
 
     private void EnsureConnected()

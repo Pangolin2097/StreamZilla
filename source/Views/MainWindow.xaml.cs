@@ -353,6 +353,102 @@ public partial class MainWindow : Window
         _viewModel.HandleRemoteDrop(items, target);
     }
 
+    private void LocalTree_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragStartPoint = e.GetPosition(null);
+
+        if (e.OriginalSource is not TextBlock)
+        {
+            return;
+        }
+
+        LocalItemViewModel? item = GetLocalItemUnderMouse(e.OriginalSource);
+
+        if (item == null)
+        {
+            return;
+        }
+
+        _viewModel.OnLocalMouseDown(item, Keyboard.Modifiers);
+    }
+
+    private void LocalTree_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragging || e.LeftButton != MouseButtonState.Pressed)
+        {
+            return;
+        }
+
+        LocalItemViewModel? underMouse = GetLocalItemUnderMouse(e.OriginalSource);
+
+        if (underMouse == null)
+        {
+            return;
+        }
+
+        Point position = e.GetPosition(null);
+        Vector diff = _dragStartPoint - position;
+
+        if (Math.Abs(diff.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(diff.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        List<LocalItemViewModel> selectedItems = _viewModel.GetHighlightedLocalItems();
+
+        if (selectedItems.Count == 0)
+        {
+            selectedItems.Add(underMouse);
+        }
+
+        _dragging = true;
+
+        try
+        {
+            DataObject data = new DataObject();
+            data.SetData("StreamZillaLocalItems", selectedItems);
+            DragDrop.DoDragDrop(LocalTree, data, DragDropEffects.Copy);
+        }
+        finally
+        {
+            _dragging = false;
+        }
+    }
+
+    private void RemoteTree_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent("StreamZillaLocalItems"))
+        {
+            e.Effects = DragDropEffects.Copy;
+        }
+        else
+        {
+            e.Effects = DragDropEffects.None;
+        }
+
+        e.Handled = true;
+    }
+
+    private void RemoteTree_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent("StreamZillaLocalItems"))
+        {
+            return;
+        }
+
+        RemoteItemViewModel? target = GetRemoteItemUnderMouse(e.OriginalSource);
+
+        if (target == null)
+        {
+            target = null;
+        }
+
+        List<LocalItemViewModel> items = (List<LocalItemViewModel>)e.Data.GetData("StreamZillaLocalItems");
+
+        _viewModel.HandleLocalDrop(items, target);
+    }
+
     private void LocalItem_Expanded(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalItemViewModel item)
