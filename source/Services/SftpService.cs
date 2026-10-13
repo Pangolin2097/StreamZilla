@@ -366,6 +366,12 @@ public sealed class SftpService : IDisposable
         {
             return false;
         }
+        catch (Renci.SshNet.Common.SftpPermissionDeniedException)
+        {
+            // Permission denied on list means the path exists (likely a directory
+            // we can write to but not read). Treat it as a directory.
+            return true;
+        }
     }
 
     private void DeleteDirectoryRecursive(string remotePath)
