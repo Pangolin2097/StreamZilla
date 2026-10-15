@@ -1,5 +1,8 @@
+using System.Collections;
 using System.Collections.ObjectModel;
+using System.Windows.Media;
 using StreamZilla.Models;
+using StreamZilla.Services;
 
 namespace StreamZilla.ViewModels;
 
@@ -14,6 +17,7 @@ public class LocalItemViewModel : ViewModelBase
     {
         _entry = entry;
         Parent = parent;
+        Children.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasChildren));
     }
 
     public LocalItemViewModel? Parent { get; }
@@ -66,6 +70,57 @@ public class LocalItemViewModel : ViewModelBase
         }
     }
 
+    public string FileTypeDisplay
+    {
+        get
+        {
+            if (IsDrive)
+            {
+                return "Drive";
+            }
+
+            if (IsDirectory)
+            {
+                return "Folder";
+            }
+
+            string ext = System.IO.Path.GetExtension(_entry.Name);
+            return ext.Length > 0 ? ext.TrimStart('.') : "File";
+        }
+    }
+
+    public string ModifiedDisplay
+    {
+        get
+        {
+            return _entry.Modified.ToString("g");
+        }
+    }
+
+    public DateTime Modified
+    {
+        get
+        {
+            return _entry.Modified;
+        }
+    }
+
+    public DateTime Created
+    {
+        get
+        {
+            return _entry.Created;
+        }
+    }
+
+    public string CreatedDisplay
+    {
+        get
+        {
+            return _entry.Created.ToString("g");
+        }
+    }
+
     public bool IsExpanded
     {
         get
@@ -86,11 +141,31 @@ public class LocalItemViewModel : ViewModelBase
         }
         set
         {
-            SetProperty(ref _childrenLoaded, value);
+            if (SetProperty(ref _childrenLoaded, value))
+            {
+                OnPropertyChanged(nameof(HasChildren));
+            }
         }
     }
 
     public ObservableCollection<LocalItemViewModel> Children { get; } = new ObservableCollection<LocalItemViewModel>();
+
+    public bool HasChildren
+    {
+        get
+        {
+            // Show expand arrow if not yet loaded (might have children) or if it has children
+            return !ChildrenLoaded || Children.Count > 0;
+        }
+    }
+
+    public IEnumerable<LocalItemViewModel>? TreeChildren
+    {
+        get
+        {
+            return Children.Count > 0 ? Children : null;
+        }
+    }
 
     public string Icon
     {
@@ -107,6 +182,14 @@ public class LocalItemViewModel : ViewModelBase
             }
 
             return FileIconHelper.GetFileIcon(Name);
+        }
+    }
+
+    public ImageSource IconImage
+    {
+        get
+        {
+            return FileIconService.GetFileIcon(_entry.FullPath, IsDirectory, IsDrive);
         }
     }
 

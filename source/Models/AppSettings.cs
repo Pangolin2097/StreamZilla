@@ -1,4 +1,4 @@
-namespace StreamZilla.Models;
+﻿namespace StreamZilla.Models;
 
 public class AppSettings
 {
@@ -12,9 +12,11 @@ public class AppSettings
 
     public List<string> ExpandedLocalPaths { get; set; } = new List<string>();
     public string LastLocalFolderPath { get; set; } = "";
+    public string LastLocalSelectedPath { get; set; } = "";
 
     public Dictionary<string, List<string>> ExpandedRemotePathsByConnection { get; set; } = new Dictionary<string, List<string>>();
     public string LastRemoteSelectedPath { get; set; } = "";
 
     public Dictionary<string, string> KnownHostKeys { get; set; } = new Dictionary<string, string>();
 }
+

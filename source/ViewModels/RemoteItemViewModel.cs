@@ -1,5 +1,8 @@
+using System.Collections;
 using System.Collections.ObjectModel;
+using System.Windows.Media;
 using StreamZilla.Models;
+using StreamZilla.Services;
 
 namespace StreamZilla.ViewModels;
 
@@ -14,6 +17,7 @@ public class RemoteItemViewModel : ViewModelBase
     {
         _entry = entry;
         Parent = parent;
+        Children.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasChildren));
     }
 
     public RemoteItemViewModel? Parent { get; }
@@ -63,6 +67,41 @@ public class RemoteItemViewModel : ViewModelBase
         get
         {
             return _entry.Owner;
+        }
+    }
+
+    public string Group
+    {
+        get
+        {
+            return _entry.Group;
+        }
+    }
+
+    public string OwnerGroupDisplay
+    {
+        get
+        {
+            string owner = string.IsNullOrEmpty(_entry.Owner) ? "" : _entry.Owner;
+            string group = string.IsNullOrEmpty(_entry.Group) ? "" : _entry.Group;
+            if (string.IsNullOrEmpty(owner) && string.IsNullOrEmpty(group)) return "";
+            if (string.IsNullOrEmpty(group)) return owner;
+            if (string.IsNullOrEmpty(owner)) return group;
+            return $"{owner} {group}";
+        }
+    }
+
+    public string FileTypeDisplay
+    {
+        get
+        {
+            if (IsDirectory)
+            {
+                return "Folder";
+            }
+
+            string ext = System.IO.Path.GetExtension(_entry.Name);
+            return ext.Length > 0 ? ext.TrimStart('.') : "File";
         }
     }
 
@@ -132,11 +171,31 @@ public class RemoteItemViewModel : ViewModelBase
         }
         set
         {
-            SetProperty(ref _childrenLoaded, value);
+            if (SetProperty(ref _childrenLoaded, value))
+            {
+                OnPropertyChanged(nameof(HasChildren));
+            }
         }
     }
 
     public ObservableCollection<RemoteItemViewModel> Children { get; } = new ObservableCollection<RemoteItemViewModel>();
+
+    public bool HasChildren
+    {
+        get
+        {
+            // Show expand arrow if not yet loaded (might have children) or if it has children
+            return !ChildrenLoaded || Children.Count > 0;
+        }
+    }
+
+    public IEnumerable<RemoteItemViewModel>? TreeChildren
+    {
+        get
+        {
+            return Children.Count > 0 ? Children : null;
+        }
+    }
 
     public string Icon
     {
@@ -148,6 +207,14 @@ public class RemoteItemViewModel : ViewModelBase
             }
 
             return FileIconHelper.GetFileIcon(Name);
+        }
+    }
+
+    public ImageSource IconImage
+    {
+        get
+        {
+            return FileIconService.GetFileIcon(_entry.Name, IsDirectory);
         }
     }
 

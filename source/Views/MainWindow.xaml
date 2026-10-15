@@ -210,7 +210,7 @@
                                            Margin="0,0,6,0"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
-                                <TextBlock Text="{Binding SizeDisplay}" Foreground="Gray" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding SizeDisplay}" Foreground="Gray" Margin="12,0,0,0" VerticalAlignment="Center"/>
                             </StackPanel>
                         </HierarchicalDataTemplate>
                     </TreeView.ItemTemplate>
@@ -234,10 +234,6 @@
                                     <ColumnDefinition Width="16"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="60"/>
-                                    <ColumnDefinition Width="70"/>
-                                    <ColumnDefinition Width="80"/>
-                                    <ColumnDefinition Width="80"/>
-                                    <ColumnDefinition Width="70"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0"
                                            Text="{Binding Icon}"
@@ -249,28 +245,9 @@
                                            Text="{Binding Name}"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Grid.Column="2"
-                                           Text="{Binding Owner}"
-                                           Foreground="Gray"
-                                           VerticalAlignment="Center"
-                                           ToolTip="Owner"/>
-                                <TextBlock Grid.Column="3"
-                                           Text="{Binding Permissions}"
-                                           Foreground="Gray"
-                                           VerticalAlignment="Center"
-                                           ToolTip="Permissions"/>
-                                <TextBlock Grid.Column="4"
-                                           Text="{Binding ModifiedDisplay}"
-                                           Foreground="Gray"
-                                           VerticalAlignment="Center"
-                                           ToolTip="Modified"/>
-                                <TextBlock Grid.Column="5"
-                                           Text="{Binding CreatedDisplay}"
-                                           Foreground="Gray"
-                                           VerticalAlignment="Center"
-                                           ToolTip="Created"/>
-                                <TextBlock Grid.Column="6"
                                            Text="{Binding SizeDisplay}"
                                            Foreground="Gray"
+                                           Margin="12,0,0,0"
                                            VerticalAlignment="Center"
                                            ToolTip="Size"/>
                             </Grid>
