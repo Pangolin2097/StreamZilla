@@ -204,11 +204,11 @@
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="{Binding Icon}"
-                                           FontFamily="Segoe MDL2 Assets"
-                                           Foreground="{Binding IconBrush}"
-                                           Margin="0,0,6,0"
-                                           VerticalAlignment="Center"/>
+                                <Image Source="{Binding IconImage}"
+                                       Width="16"
+                                       Height="16"
+                                       Margin="0,0,6,0"
+                                       VerticalAlignment="Center"/>
                                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
                                 <TextBlock Text="{Binding SizeDisplay}" Foreground="Gray" Margin="12,0,0,0" VerticalAlignment="Center"/>
                             </StackPanel>
@@ -226,31 +226,24 @@
                           DragOver="RemoteTree_DragOver"
                           PreviewMouseLeftButtonDown="RemoteTree_MouseDown"
                           MouseMove="RemoteTree_MouseMove"
+                          PreviewKeyDown="RemoteTree_PreviewKeyDown"
                           SelectedItemChanged="RemoteTree_SelectedItemChanged">
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="16"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="60"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0"
-                                           Text="{Binding Icon}"
-                                           FontFamily="Segoe MDL2 Assets"
-                                           Foreground="{Binding IconBrush}"
-                                           Margin="0,0,6,0"
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{Binding IconImage}"
+                                       Width="16"
+                                       Height="16"
+                                       Margin="0,0,6,0"
+                                       VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding Name}"
                                            VerticalAlignment="Center"/>
-                                <TextBlock Grid.Column="1"
-                                           Text="{Binding Name}"
-                                           VerticalAlignment="Center"/>
-                                <TextBlock Grid.Column="2"
-                                           Text="{Binding SizeDisplay}"
+                                <TextBlock Text="{Binding SizeDisplay}"
                                            Foreground="Gray"
                                            Margin="12,0,0,0"
                                            VerticalAlignment="Center"
                                            ToolTip="Size"/>
-                            </Grid>
+                            </StackPanel>
                         </HierarchicalDataTemplate>
                     </TreeView.ItemTemplate>
                 </TreeView>

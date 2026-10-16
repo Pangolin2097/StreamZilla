@@ -611,9 +611,11 @@ public class MainViewModel : ViewModelBase
         SaveSettings();
     }
 
+    private bool _isRefreshingRemoteDirectories;
+
     private void RefreshExpandedRemoteDirectories()
     {
-        if (!_sftp.IsConnected)
+        if (!_sftp.IsConnected || _isRefreshingRemoteDirectories)
         {
             return;
         }
@@ -622,48 +624,69 @@ public class MainViewModel : ViewModelBase
             .Where(x => x.IsDirectory && x.ChildrenLoaded && x.IsExpanded)
             .ToList();
 
-        foreach (RemoteItemViewModel item in expandedDirectories)
+        if (expandedDirectories.Count == 0)
+        {
+            return;
+        }
+
+        _isRefreshingRemoteDirectories = true;
+
+        _ = Task.Run(async () =>
         {
             try
             {
-                List<RemoteEntry> children = _sftp.ListDirectory(item.FullPath);
-
-                bool changed = children.Count != item.Children.Count ||
-                    !children.Select(c => (c.FullPath, c.IsDirectory, c.Size))
-                        .SequenceEqual(item.Children.Select(c => (c.FullPath, c.IsDirectory, c.Size)));
-
-                if (!changed)
+                foreach (RemoteItemViewModel item in expandedDirectories)
                 {
-                    continue;
-                }
+                    List<RemoteEntry> children;
 
-                HashSet<string> expandedChildPaths = item.Children
-                    .Where(c => c.IsDirectory && c.IsExpanded)
-                    .Select(c => c.FullPath)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-                item.Children.Clear();
-
-                foreach (RemoteEntry child in children)
-                {
-                    item.Children.Add(new RemoteItemViewModel(child, item));
-                }
-
-                foreach (RemoteItemViewModel child in item.Children)
-                {
-                    if (expandedChildPaths.Contains(child.FullPath))
+                    try
                     {
-                        child.IsExpanded = true;
+                        children = _sftp.ListDirectory(item.FullPath);
                     }
-                }
+                    catch (Exception ex)
+                    {
+                        LogService.Warn($"Could not refresh remote directory {item.FullPath}: {ex.Message}");
+                        continue;
+                    }
 
-                LogService.Info($"Refreshed expanded remote directory: {item.FullPath}");
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        bool changed = children.Count != item.Children.Count ||
+                            !children.Select(c => (c.FullPath, c.IsDirectory, c.Size))
+                                .SequenceEqual(item.Children.Select(c => (c.FullPath, c.IsDirectory, c.Size)));
+
+                        if (!changed)
+                        {
+                            return;
+                        }
+
+                        HashSet<string> expandedChildPaths = item.Children
+                            .Where(c => c.IsDirectory && c.IsExpanded)
+                            .Select(c => c.FullPath)
+                            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                        item.Children.Clear();
+
+                        foreach (RemoteEntry child in children)
+                        {
+                            item.Children.Add(new RemoteItemViewModel(child, item));
+                        }
+
+                        foreach (RemoteItemViewModel child in item.Children)
+                        {
+                            if (expandedChildPaths.Contains(child.FullPath))
+                            {
+                                child.IsExpanded = true;
+                            }
+                        }
+                    });
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                LogService.Warn($"Could not refresh remote directory {item.FullPath}: {ex.Message}");
+                _isRefreshingRemoteDirectories = false;
             }
-        }
+        });
     }
 
     // ---------- Local tree ----------
@@ -1242,11 +1265,11 @@ public class MainViewModel : ViewModelBase
 
         try
         {
-            remoteFiles = await Task.Run(() => _sftp.ListFilesRecursiveIsolated(_settings, directory.FullPath));
+            remoteFiles = await Task.Run(() => _sftp.ListFilesRecursive(directory.FullPath));
         }
         catch (Exception ex)
         {
-            await Application.Current?.Dispatcher.InvokeAsync(() =>
+            await Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 placeholder.Status = "Error";
                 placeholder.ErrorMessage = ex.Message;
@@ -1256,7 +1279,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        await Application.Current?.Dispatcher.InvokeAsync(() =>
+        await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             Downloads.Remove(placeholder);
 
@@ -1394,8 +1417,6 @@ public class MainViewModel : ViewModelBase
         {
             LogService.Info($"Restored {restored} unfinished download(s) for this connection.");
         }
-
-        StartNextQueuedDownload();
     }
 
     private void SaveQueue()
@@ -1423,22 +1444,38 @@ public class MainViewModel : ViewModelBase
         });
     }
 
+    private DateTime _lastQueueSave = DateTime.MinValue;
+
     private void PollDownloads(object? sender, EventArgs e)
     {
+        bool changed = false;
+
         foreach (DownloadItemViewModel item in Downloads.ToList())
         {
             long completed = item.CompletedLength;
             long delta = completed - item.LastPollCompleted;
+
+            if (delta != 0)
+            {
+                changed = true;
+            }
+
             item.DownloadSpeed = (long)(delta / _pollTimer.Interval.TotalSeconds);
             item.LastPollCompleted = completed;
-
             item.RefreshProgress();
         }
 
-        OnPropertyChanged(nameof(TotalSpeedDisplay));
-        OnPropertyChanged(nameof(QueueCountDisplay));
-        OnPropertyChanged(nameof(TotalSizeDisplay));
-        SaveQueue();
+        if (changed)
+        {
+            OnPropertyChanged(nameof(TotalSpeedDisplay));
+            OnPropertyChanged(nameof(TotalSizeDisplay));
+
+            if ((DateTime.UtcNow - _lastQueueSave).TotalSeconds >= 5)
+            {
+                _lastQueueSave = DateTime.UtcNow;
+                SaveQueue();
+            }
+        }
     }
 
     public void PauseDownload(DownloadItemViewModel item)
@@ -1477,7 +1514,24 @@ public class MainViewModel : ViewModelBase
 
         if (!_sftp.IsConnected)
         {
-            _dialogs.ShowInformation("Resume", "Connect to the SFTP server first, then resume the download.");
+            _dialogs.ShowInformation("Resume", "Connect to the SFTP server first, then resume the transfer.");
+            return;
+        }
+
+        if (item.Entry.Direction == TransferDirection.Upload)
+        {
+            if (_activeDownloadIds.Contains(item.Entry.Id))
+            {
+                return;
+            }
+
+            StartUpload(
+                item.Entry,
+                item,
+                item.LocalPath,
+                item.RemotePath,
+                resume: true);
+
             return;
         }
 
@@ -1706,6 +1760,91 @@ public class MainViewModel : ViewModelBase
         }
     }
 
+    public void DeleteRemoteItems(IList? items)
+    {
+        List<RemoteItemViewModel> remoteItems = items?.OfType<RemoteItemViewModel>().ToList() ?? new List<RemoteItemViewModel>();
+
+        if (remoteItems.Count == 0)
+        {
+            return;
+        }
+
+        string message = remoteItems.Count == 1
+            ? $"Delete remote item '{remoteItems[0].Name}'?"
+            : $"Delete {remoteItems.Count} remote items?";
+
+        if (!_dialogs.Confirm("Confirm delete", message))
+        {
+            return;
+        }
+
+        foreach (RemoteItemViewModel item in remoteItems.ToList())
+        {
+            try
+            {
+                _sftp.DeleteDirectory(item.FullPath);
+
+                if (item.Parent != null)
+                {
+                    item.Parent.Children.Remove(item);
+                }
+
+                LogService.Info($"Deleted remote item: {item.FullPath}");
+            }
+            catch (Exception ex)
+            {
+                LogService.Error($"Delete remote item failed: {ex}");
+                _dialogs.ShowError("Delete error", ex.Message);
+            }
+        }
+    }
+
+    public void DeleteLocalItems(IList? items)
+    {
+        List<LocalItemViewModel> localItems = items?.OfType<LocalItemViewModel>().Where(x => !x.IsDrive).ToList() ?? new List<LocalItemViewModel>();
+
+        if (localItems.Count == 0)
+        {
+            return;
+        }
+
+        string message = localItems.Count == 1
+            ? $"Delete '{localItems[0].Name}'?"
+            : $"Delete {localItems.Count} local items?";
+
+        if (!_dialogs.Confirm("Confirm delete", message))
+        {
+            return;
+        }
+
+        foreach (LocalItemViewModel item in localItems.ToList())
+        {
+            try
+            {
+                if (item.IsDirectory)
+                {
+                    Directory.Delete(item.FullPath, true);
+                }
+                else
+                {
+                    File.Delete(item.FullPath);
+                }
+
+                if (item.Parent != null)
+                {
+                    item.Parent.Children.Remove(item);
+                }
+
+                LogService.Info($"Deleted local item: {item.FullPath}");
+            }
+            catch (Exception ex)
+            {
+                LogService.Error($"Delete failed: {ex}");
+                _dialogs.ShowError("Delete error", ex.Message);
+            }
+        }
+    }
+
     private void UploadToRemote(RemoteItemViewModel target)
     {
         RemoteItemViewModel? directory = target.IsDirectory ? target : target.Parent;
@@ -1748,8 +1887,18 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private void StartUpload(DownloadEntry entry, DownloadItemViewModel itemVm, string localPath, string remotePath)
+    private void StartUpload(
+        DownloadEntry entry,
+        DownloadItemViewModel itemVm,
+        string localPath,
+        string remotePath,
+        bool resume = false)
     {
+        if (_activeDownloadIds.Contains(entry.Id))
+        {
+            return;
+        }
+
         CancellationTokenSource cts = new CancellationTokenSource();
         _cancellationTokens[entry.Id] = cts;
         _activeDownloadIds.Add(entry.Id);
@@ -1763,6 +1912,27 @@ public class MainViewModel : ViewModelBase
         {
             try
             {
+                long startOffset = 0;
+
+                if (resume)
+                {
+                    startOffset = _sftp.GetRemoteFileSize(remotePath);
+                    long localLength = new FileInfo(localPath).Length;
+
+                    if (startOffset >= localLength)
+                    {
+                        itemVm.CompletedLength = localLength;
+                        itemVm.RefreshProgress();
+                        itemVm.Status = "Complete";
+                        LogService.Info($"Upload already complete: {localPath} -> {remotePath}");
+                        return;
+                    }
+
+                    itemVm.CompletedLength = startOffset;
+                    itemVm.RefreshProgress();
+                    LogService.Info($"Resuming upload at {startOffset} bytes: {localPath} -> {remotePath}");
+                }
+
                 await _sftp.UploadFileAsync(
                     localPath,
                     remotePath,
@@ -1771,11 +1941,11 @@ public class MainViewModel : ViewModelBase
                         long delta = progress - lastReported;
                         DateTime now = DateTime.UtcNow;
 
-                        if (now - lastUpdate >= TimeSpan.FromMilliseconds(200) || delta > 0)
+                        if (now - lastUpdate >= TimeSpan.FromMilliseconds(200) || progress >= entry.TotalLength)
                         {
                             itemVm.CompletedLength = progress;
-                            double seconds = (now - lastUpdate).TotalSeconds;
 
+                            double seconds = (now - lastUpdate).TotalSeconds;
                             if (seconds > 0)
                             {
                                 itemVm.DownloadSpeed = (long)(delta / seconds);
@@ -1786,7 +1956,8 @@ public class MainViewModel : ViewModelBase
                             itemVm.RefreshProgress();
                         }
                     },
-                    cts.Token);
+                    cts.Token,
+                    startOffset);
 
                 itemVm.Status = "Complete";
                 LogService.Info($"Upload complete: {localPath} -> {remotePath}");
@@ -1794,12 +1965,14 @@ public class MainViewModel : ViewModelBase
             catch (OperationCanceledException)
             {
                 itemVm.Status = "Paused";
+                itemVm.DownloadSpeed = 0;
                 LogService.Info($"Upload paused: {localPath}");
             }
             catch (Exception ex)
             {
-                itemVm.Status = "Failed";
+                itemVm.Status = "Error";
                 itemVm.ErrorMessage = ex.Message;
+                itemVm.DownloadSpeed = 0;
                 LogService.Error($"Upload failed: {ex}");
             }
             finally

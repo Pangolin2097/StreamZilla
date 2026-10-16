@@ -257,6 +257,27 @@ public partial class MainWindow : Window
         _viewModel.OnRemoteSelectionChanged(e.NewValue as RemoteItemViewModel);
     }
 
+    private void RemoteTree_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Delete)
+        {
+            return;
+        }
+
+        List<RemoteItemViewModel> items = _viewModel.GetHighlightedRemoteItems();
+
+        if (items.Count == 0 && RemoteTree.SelectedItem is RemoteItemViewModel selected)
+        {
+            items.Add(selected);
+        }
+
+        if (items.Count > 0)
+        {
+            _viewModel.DeleteRemoteItems(items);
+            e.Handled = true;
+        }
+    }
+
     private void RemoteTree_MouseDown(object sender, MouseButtonEventArgs e)
     {
         _dragStartPoint = e.GetPosition(null);
@@ -477,9 +498,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (LocalTree.SelectedItem is LocalItemViewModel item)
+        List<LocalItemViewModel> items = _viewModel.GetHighlightedLocalItems();
+
+        if (items.Count == 0 && LocalTree.SelectedItem is LocalItemViewModel selected)
         {
-            _viewModel.DeleteLocalItem(item);
+            items.Add(selected);
+        }
+
+        if (items.Count > 0)
+        {
+            _viewModel.DeleteLocalItems(items);
             e.Handled = true;
         }
     }

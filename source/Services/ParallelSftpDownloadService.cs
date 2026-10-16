@@ -9,8 +9,11 @@ namespace StreamZilla.Services;
 
 public sealed class ParallelSftpDownloadService
 {
+    private const int ChunkSize = 4 * 1024 * 1024;
     private const int BufferSize = 1024 * 1024;
     private const string TempFileSuffix = ".streamzilla-download";
+    private const int ConnectAttempts = 3;
+    private const int ProgressIntervalMilliseconds = 150;
 
     public event Action<long>? OnProgress;
 
@@ -37,22 +40,9 @@ public sealed class ParallelSftpDownloadService
         string tempPath = localPath + TempFileSuffix;
 
         bool tempExists = File.Exists(tempPath);
-        bool sizeMatches = tempExists && new FileInfo(tempPath).Length == totalSize;
 
-        int expectedChunkCount = Math.Max(1, Math.Min(connections, (int)Math.Max(1, totalSize / (1024 * 1024))));
-
-        if (!tempExists || !sizeMatches)
-        {
-            using (FileStream createStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.Read))
-            {
-                createStream.SetLength(totalSize);
-            }
-
-            entry.ResetChunkBytes(expectedChunkCount);
-
-            LogService.Info($"Starting download to temporary file: {tempPath} ({totalSize} bytes, {expectedChunkCount} stream(s)).");
-        }
-        else
+        int expectedChunkCount = Math.Max(1, Math.Min(connections, (int)Math.Max(1, totalSize / ChunkSize)));
+        if (tempExists)
         {
             if (entry.ChunkBytes.Length != expectedChunkCount)
             {
@@ -73,29 +63,52 @@ public sealed class ParallelSftpDownloadService
                     }
                 }
 
+                entry.CompletedLength = entry.ChunkBytes.Sum();
+                entry.Status = "Resuming";
+
                 LogService.Info($"Resuming download: {remoteFile.FullPath} at {entry.CompletedLength} of {totalSize} bytes; {remainingChunks} chunk(s) remaining.");
             }
+        }
+        else
+        {
+            entry.ResetChunkBytes(expectedChunkCount);
+
+            LogService.Info($"Starting download to temporary file: {tempPath} ({totalSize} bytes, {expectedChunkCount} stream(s)).");
         }
 
         List<Task> tasks = new List<Task>();
 
-        for (int i = 0; i < expectedChunkCount; i++)
+        SftpClient[] clients = new SftpClient[Math.Min(expectedChunkCount, connections)];
+        List<byte[]> buffers = new List<byte[]>(clients.Length);
+
+        for (int i = 0; i < clients.Length; ++i)
         {
-            long chunkLength = ChunkLength(i, expectedChunkCount, totalSize);
-
-            if (entry.IsChunkComplete(i, chunkLength))
-            {
-                continue;
-            }
-
-            long start = i * (totalSize / expectedChunkCount);
-            long end = (i == expectedChunkCount - 1) ? totalSize - 1 : start + chunkLength - 1;
-
-            int chunkIndex = i;
-            tasks.Add(DownloadChunkAsync(settings, remoteFile.FullPath, tempPath, start, end, entry, chunkIndex, token));
+            clients[i] = await ConnectWithRetryAsync(settings, token);
+            buffers.Add(new byte[BufferSize]);
         }
 
-        await Task.WhenAll(tasks);
+        try
+        {
+            await Parallel.ForEachAsync(Enumerable.Range(0, expectedChunkCount), new ParallelOptions { MaxDegreeOfParallelism = clients.Length, CancellationToken = token }, async (chunkIndex, token) =>
+            {
+                long chunkLength = ChunkLength(chunkIndex, expectedChunkCount, totalSize);
+
+                if (!entry.IsChunkComplete(chunkIndex, chunkLength))
+                {
+                    long start = chunkIndex * ChunkSize;
+                    long end = start + chunkLength - 1;
+
+                    int clientIndex = chunkIndex % clients.Length;
+                    await DownloadChunkAsync(clients[clientIndex], buffers[clientIndex], remoteFile.FullPath, tempPath, start, end, entry, chunkIndex, token);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            entry.Status = token.IsCancellationRequested ? "Paused" : "Error";
+            LogService.Error($"Download failed for {remoteFile.FullPath}: {ex.Message}");
+            throw;
+        }
 
         if (!token.IsCancellationRequested)
         {
@@ -140,20 +153,17 @@ public sealed class ParallelSftpDownloadService
 
     private static long ChunkLength(int chunkIndex, int chunkCount, long totalSize)
     {
-        long chunkSize = totalSize / chunkCount;
-
         if (chunkIndex == chunkCount - 1)
         {
-            return totalSize - (chunkSize * (chunkCount - 1));
+            return totalSize - (ChunkSize * (chunkCount - 1));
         }
 
-        return chunkSize;
+        return ChunkSize;
     }
 
-    // Runs the entire chunk download (connect, read, write, disconnect) on a thread-pool
-    // thread so cancelling or completing a download never blocks the UI thread.
     private Task DownloadChunkAsync(
-        AppSettings settings,
+        SftpClient client,
+        byte[] buffer,
         string remotePath,
         string tempPath,
         long start,
@@ -164,23 +174,26 @@ public sealed class ParallelSftpDownloadService
     {
         return Task.Run(async () =>
         {
-            SftpClient client = CreateClient(settings);
-
             try
             {
-                client.Connect();
-
                 using (Stream remote = client.OpenRead(remotePath))
                 {
                     remote.Seek(start, SeekOrigin.Begin);
 
-                    using (FileStream local = new FileStream(tempPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                    using (FileStream local = new FileStream(tempPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
                     {
                         local.Seek(start, SeekOrigin.Begin);
 
-                        byte[] buffer = new byte[BufferSize];
                         long position = start;
-                        long chunkWritten = 0;
+                        long chunkWritten = entry.ChunkBytes[chunkIndex];
+                        long lastNotified = Environment.TickCount64;
+
+                        if (chunkWritten > 0)
+                        {
+                            position += chunkWritten;
+                            remote.Seek(position, SeekOrigin.Begin);
+                            local.Seek(position, SeekOrigin.Begin);
+                        }
 
                         while (position <= end)
                         {
@@ -199,7 +212,13 @@ public sealed class ParallelSftpDownloadService
                             chunkWritten += read;
 
                             entry.SetChunkBytes(chunkIndex, chunkWritten);
-                            OnProgress?.Invoke(entry.CompletedLength);
+
+                            long now = Environment.TickCount64;
+                            if (now - lastNotified >= ProgressIntervalMilliseconds || position > end)
+                            {
+                                lastNotified = now;
+                                OnProgress?.Invoke(entry.CompletedLength);
+                            }
                         }
                     }
                 }
@@ -219,6 +238,39 @@ public sealed class ParallelSftpDownloadService
         }, token);
     }
 
+    private static async Task<SftpClient> ConnectWithRetryAsync(AppSettings settings, CancellationToken token)
+    {
+        Exception? lastError = null;
+
+        for (int attempt = 1; attempt <= ConnectAttempts; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+
+            SftpClient client = CreateClient(settings);
+
+            try
+            {
+                await Task.Run(client.Connect, token);
+                return client;
+            }
+            catch (Exception ex) when (attempt < ConnectAttempts && !token.IsCancellationRequested)
+            {
+                lastError = ex;
+                LogService.Warn($"SFTP connection attempt {attempt} failed: {ex.Message}. Retrying.");
+                client.Dispose();
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), token);
+            }
+            catch
+            {
+                client.Dispose();
+                throw;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Could not connect to {settings.Host}:{settings.Port} after {ConnectAttempts} attempts.", lastError);
+    }
+
     public static SftpClient CreateClient(AppSettings settings)
     {
         AuthenticationMethod auth = new PasswordAuthenticationMethod(settings.Username, settings.Password);
@@ -228,6 +280,12 @@ public sealed class ParallelSftpDownloadService
             Timeout = TimeSpan.FromSeconds(15)
         };
 
-        return new SftpClient(info);
+        SftpClient client = new SftpClient(info)
+        {
+            OperationTimeout = TimeSpan.FromSeconds(30),
+            KeepAliveInterval = TimeSpan.FromSeconds(15)
+        };
+
+        return client;
     }
 }
