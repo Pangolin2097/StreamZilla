@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 using Renci.SshNet.Sftp;
@@ -12,7 +13,7 @@ namespace StreamZilla.Services;
 public sealed class SftpService : IDisposable
 {
     public const string PermissionDeniedMessage = "Permission denied on the remote server.";
-    private const string UploadTempSuffix = ".streamzilla-upload";
+    public const string SidecarSuffix = ".streamzilla-progress";
 
     private SftpClient? _client;
     private byte[]? _lastHostKey;
@@ -280,7 +281,7 @@ public sealed class SftpService : IDisposable
 
             long totalLength = new FileInfo(localPath).Length;
             string remoteDirectory = Path.GetDirectoryName(remotePath) ?? "/";
-            string tempPath = remotePath + UploadTempSuffix;
+            string sidecarPath = remotePath + SidecarSuffix;
 
             if (remoteDirectory.Length > 0 && !remoteDirectory.Equals("/", StringComparison.Ordinal))
             {
@@ -298,7 +299,18 @@ public sealed class SftpService : IDisposable
 
             token.ThrowIfCancellationRequested();
 
-            long resumeOffset = GetUploadResumeOffset(tempPath);
+            long sidecarOffset = ReadUploadSidecarOffset(sidecarPath);
+            long remoteSize = GetRemoteFileSize(remotePath);
+            long resumeOffset = sidecarOffset > 0
+                ? Math.Min(sidecarOffset, remoteSize)
+                : 0;
+
+            if (resumeOffset == 0 && remoteSize > 0)
+            {
+                _client!.DeleteFile(remotePath);
+            }
+
+            WriteUploadSidecar(sidecarPath, totalLength, resumeOffset);
             progress?.Invoke(resumeOffset);
 
             using (FileStream source = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -308,7 +320,7 @@ public sealed class SftpService : IDisposable
                     source.Seek(resumeOffset, SeekOrigin.Begin);
                 }
 
-                SftpFileStream destination = _client!.OpenWrite(tempPath);
+                SftpFileStream destination = _client!.OpenWrite(remotePath);
 
                 if (resumeOffset > 0)
                 {
@@ -319,6 +331,7 @@ public sealed class SftpService : IDisposable
                 {
                     byte[] buffer = new byte[1024 * 1024];
                     long written = resumeOffset;
+                    long lastSidecarUpdate = 0;
 
                     while (true)
                     {
@@ -335,39 +348,75 @@ public sealed class SftpService : IDisposable
                         destination.Flush();
                         written += read;
                         progress?.Invoke(written);
+
+                        if (written - lastSidecarUpdate >= 1024 * 1024 || written >= totalLength)
+                        {
+                            lastSidecarUpdate = written;
+                            WriteUploadSidecar(sidecarPath, totalLength, written);
+                        }
                     }
                 }
             }
 
             token.ThrowIfCancellationRequested();
 
-            try
-            {
-                if (_client!.Exists(remotePath))
-                {
-                    _client.DeleteFile(remotePath);
-                }
-
-                _client.RenameFile(tempPath, remotePath);
-            }
-            catch (SftpPathNotFoundException)
-            {
-            }
-
+            DeleteRemoteFileIfExists(sidecarPath);
             LogService.Info($"Uploaded file: {localPath} -> {remotePath} ({totalLength} bytes).");
         }, token);
     }
 
-    private long GetUploadResumeOffset(string tempPath)
+    private long ReadUploadSidecarOffset(string sidecarPath)
     {
         try
         {
-            SftpFileAttributes attributes = _client!.GetAttributes(tempPath);
-            return attributes.IsDirectory ? 0 : attributes.Size;
+            if (!_client!.Exists(sidecarPath))
+            {
+                return 0;
+            }
+
+            TransferSidecar? sidecar = JsonSerializer.Deserialize<TransferSidecar>(
+                _client.ReadAllText(sidecarPath));
+
+            return sidecar?.CompletedLength ?? 0;
+        }
+        catch (Exception ex)
+        {
+            LogService.Warn($"Could not read upload sidecar {sidecarPath}: {ex.Message}");
+            return 0;
+        }
+    }
+
+    private void WriteUploadSidecar(string sidecarPath, long totalLength, long completedLength)
+    {
+        try
+        {
+            TransferSidecar sidecar = new TransferSidecar
+            {
+                Direction = "Upload",
+                TotalLength = totalLength,
+                CompletedLength = completedLength,
+                UpdatedAtUtc = DateTime.UtcNow
+            };
+
+            _client!.WriteAllText(sidecarPath, JsonSerializer.Serialize(sidecar));
+        }
+        catch (Exception ex)
+        {
+            LogService.Warn($"Could not write upload sidecar {sidecarPath}: {ex.Message}");
+        }
+    }
+
+    private void DeleteRemoteFileIfExists(string remotePath)
+    {
+        try
+        {
+            if (_client!.Exists(remotePath))
+            {
+                _client.DeleteFile(remotePath);
+            }
         }
         catch (SftpPathNotFoundException)
         {
-            return 0;
         }
     }
 
@@ -665,5 +714,14 @@ public sealed class SftpService : IDisposable
     public void Dispose()
     {
         Disconnect();
+    }
+
+    private sealed class TransferSidecar
+    {
+        public string TransferId { get; set; } = string.Empty;
+        public string Direction { get; set; } = string.Empty;
+        public long TotalLength { get; set; }
+        public long CompletedLength { get; set; }
+        public DateTime UpdatedAtUtc { get; set; }
     }
 }

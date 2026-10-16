@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Renci.SshNet;
@@ -10,7 +11,7 @@ namespace StreamZilla.Services;
 public sealed class ParallelSftpDownloadService
 {
     private const int BufferSize = 1024 * 1024;
-    private const string TempFileSuffix = ".streamzilla-download";
+    public const string SidecarSuffix = ".streamzilla-progress";
     private const int ConnectAttempts = 3;
     private const int ProgressIntervalMilliseconds = 150;
 
@@ -36,23 +37,23 @@ public sealed class ParallelSftpDownloadService
         string destination = Path.GetDirectoryName(localPath) ?? ".";
         Directory.CreateDirectory(destination);
 
-        string tempPath = localPath + TempFileSuffix;
-
-        bool tempExists = File.Exists(tempPath);
-        bool sizeMatches = tempExists && new FileInfo(tempPath).Length == totalSize;
+        string sidecarPath = localPath + SidecarSuffix;
+        bool isNewDownload = !File.Exists(sidecarPath);
 
         int expectedChunkCount = Math.Max(1, Math.Min(connections, (int)Math.Max(1, totalSize / (1024 * 1024))));
 
-        if (!tempExists || !sizeMatches)
+        if (isNewDownload)
         {
-            using (FileStream createStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.Read))
-            {
-                createStream.SetLength(totalSize);
-            }
-
             entry.ResetChunkBytes(expectedChunkCount);
 
-            LogService.Info($"Starting download to temporary file: {tempPath} ({totalSize} bytes, {expectedChunkCount} stream(s)).");
+            using (FileStream createStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.Read))
+            {
+                // Intentionally do not preallocate the destination file. Its size grows
+                // as data is written, providing a visible indication that it is incomplete.
+            }
+
+            WriteDownloadSidecar(sidecarPath, entry, totalSize);
+            LogService.Info($"Starting download to {localPath} ({totalSize} bytes, {expectedChunkCount} stream(s)).");
         }
         else
         {
@@ -61,28 +62,16 @@ public sealed class ParallelSftpDownloadService
                 entry.ResetChunkBytes(expectedChunkCount);
                 LogService.Info($"Restarting download for {remoteFile.FullPath}: saved chunk state was missing or incompatible.");
             }
-            else
-            {
-                int remainingChunks = 0;
 
-                for (int i = 0; i < expectedChunkCount; i++)
-                {
-                    long chunkLength = ChunkLength(i, expectedChunkCount, totalSize);
+            entry.CompletedLength = entry.ChunkBytes.Sum();
+            entry.Status = "Resuming";
+            WriteDownloadSidecar(sidecarPath, entry, totalSize);
 
-                    if (!entry.IsChunkComplete(i, chunkLength))
-                    {
-                        remainingChunks++;
-                    }
-                }
-
-                entry.CompletedLength = entry.ChunkBytes.Sum();
-                entry.Status = "Resuming";
-
-                LogService.Info($"Resuming download: {remoteFile.FullPath} at {entry.CompletedLength} of {totalSize} bytes; {remainingChunks} chunk(s) remaining.");
-            }
+            LogService.Info($"Resuming download: {remoteFile.FullPath} at {entry.CompletedLength} of {totalSize} bytes.");
         }
 
         List<Task> tasks = new List<Task>();
+        object sidecarLock = new();
 
         for (int i = 0; i < expectedChunkCount; i++)
         {
@@ -97,7 +86,17 @@ public sealed class ParallelSftpDownloadService
             long end = (i == expectedChunkCount - 1) ? totalSize - 1 : start + chunkLength - 1;
 
             int chunkIndex = i;
-            tasks.Add(DownloadChunkAsync(settings, remoteFile.FullPath, tempPath, start, end, entry, chunkIndex, token));
+            tasks.Add(DownloadChunkAsync(
+                settings,
+                remoteFile.FullPath,
+                localPath,
+                sidecarPath,
+                start,
+                end,
+                entry,
+                chunkIndex,
+                sidecarLock,
+                token));
         }
 
         try
@@ -106,6 +105,11 @@ public sealed class ParallelSftpDownloadService
         }
         catch (Exception ex)
         {
+            lock (sidecarLock)
+            {
+                WriteDownloadSidecar(sidecarPath, entry, totalSize);
+            }
+
             entry.Status = token.IsCancellationRequested ? "Paused" : "Error";
             LogService.Error($"Download failed for {remoteFile.FullPath}: {ex.Message}");
             throw;
@@ -118,129 +122,125 @@ public sealed class ParallelSftpDownloadService
                 entry.SetChunkBytes(i, ChunkLength(i, expectedChunkCount, totalSize));
             }
 
-            await FinalizeDownloadAsync(tempPath, localPath);
+            entry.CompletedLength = totalSize;
+            WriteDownloadSidecar(sidecarPath, entry, totalSize);
+
+            if (File.Exists(sidecarPath))
+            {
+                File.Delete(sidecarPath);
+            }
 
             entry.Status = "Complete";
             LogService.Info($"Download complete: {remoteFile.FullPath} -> {localPath}");
         }
     }
 
-    private static async Task FinalizeDownloadAsync(string tempPath, string localPath)
-    {
-        const int maxAttempts = 10;
-
-        for (int attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
-            {
-                File.Move(tempPath, localPath, overwrite: true);
-                return;
-            }
-            catch (IOException) when (attempt < maxAttempts)
-            {
-                await Task.Delay(250);
-            }
-            catch (UnauthorizedAccessException) when (attempt < maxAttempts)
-            {
-                await Task.Delay(250);
-            }
-        }
-    }
-
-    public static string GetTempFilePath(string localPath)
-    {
-        return localPath + TempFileSuffix;
-    }
-
-    private static long ChunkLength(int chunkIndex, int chunkCount, long totalSize)
-    {
-        long chunkSize = totalSize / chunkCount;
-
-        if (chunkIndex == chunkCount - 1)
-        {
-            return totalSize - (chunkSize * (chunkCount - 1));
-        }
-
-        return chunkSize;
-    }
-
-    private Task DownloadChunkAsync(
+    private static async Task DownloadChunkAsync(
         AppSettings settings,
         string remotePath,
-        string tempPath,
+        string localPath,
+        string sidecarPath,
         long start,
         long end,
         DownloadEntry entry,
         int chunkIndex,
+        object sidecarLock,
         CancellationToken token)
     {
-        return Task.Run(async () =>
+        SftpClient client = await ConnectWithRetryAsync(settings, token);
+
+        try
         {
-            SftpClient client = await ConnectWithRetryAsync(settings, token);
+            using Stream remote = client.OpenRead(remotePath);
+            remote.Seek(start, SeekOrigin.Begin);
 
-            try
+            using FileStream local = new FileStream(
+                localPath,
+                FileMode.OpenOrCreate,
+                FileAccess.Write,
+                FileShare.ReadWrite);
+
+            long position = start;
+            long chunkWritten = entry.ChunkBytes[chunkIndex];
+            long lastNotified = Environment.TickCount64;
+
+            if (chunkWritten > 0)
             {
-                using (Stream remote = client.OpenRead(remotePath))
+                position += chunkWritten;
+                remote.Seek(position, SeekOrigin.Begin);
+                local.Seek(position, SeekOrigin.Begin);
+            }
+
+            byte[] buffer = new byte[BufferSize];
+
+            while (position <= end)
+            {
+                token.ThrowIfCancellationRequested();
+
+                int toRead = (int)Math.Min(buffer.Length, end - position + 1);
+                int read = remote.Read(buffer, 0, toRead);
+
+                if (read <= 0)
                 {
-                    remote.Seek(start, SeekOrigin.Begin);
+                    break;
+                }
 
-                    using (FileStream local = new FileStream(tempPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                local.Write(buffer, 0, read);
+                position += read;
+                chunkWritten += read;
+
+                entry.SetChunkBytes(chunkIndex, chunkWritten);
+
+                long now = Environment.TickCount64;
+
+                if (now - lastNotified >= ProgressIntervalMilliseconds || position > end)
+                {
+                    lastNotified = now;
+                    OnProgress?.Invoke(entry.CompletedLength);
+
+                    lock (sidecarLock)
                     {
-                        local.Seek(start, SeekOrigin.Begin);
-
-                        byte[] buffer = new byte[BufferSize];
-                        long position = start;
-                        long chunkWritten = entry.ChunkBytes[chunkIndex];
-                        long lastNotified = Environment.TickCount64;
-
-                        if (chunkWritten > 0)
-                        {
-                            position += chunkWritten;
-                            remote.Seek(position, SeekOrigin.Begin);
-                            local.Seek(position, SeekOrigin.Begin);
-                        }
-
-                        while (position <= end)
-                        {
-                            token.ThrowIfCancellationRequested();
-
-                            int toRead = (int)Math.Min(buffer.Length, end - position + 1);
-                            int read = remote.Read(buffer, 0, toRead);
-
-                            if (read <= 0)
-                            {
-                                break;
-                            }
-
-                            local.Write(buffer, 0, read);
-                            position += read;
-                            chunkWritten += read;
-
-                            entry.SetChunkBytes(chunkIndex, chunkWritten);
-
-                            long now = Environment.TickCount64;
-                            if (now - lastNotified >= ProgressIntervalMilliseconds || position > end)
-                            {
-                                lastNotified = now;
-                                OnProgress?.Invoke(entry.CompletedLength);
-                            }
-                        }
+                        WriteDownloadSidecar(sidecarPath, entry, entry.TotalLength);
                     }
                 }
             }
-            finally
+        }
+        finally
+        {
+            try
             {
-                try
-                {
-                    client.Disconnect();
-                }
-                catch
-                {
-                }
-
-                client.Dispose();
+                client.Disconnect();
             }
-        }, token);
+            catch
+            {
+            }
+
+            client.Dispose();
+        }
+    }
+
+    private static void WriteDownloadSidecar(string sidecarPath, DownloadEntry entry, long totalLength)
+    {
+        try
+        {
+            TransferSidecar sidecar = new TransferSidecar
+            {
+                TransferId = entry.Id,
+                Direction = "Download",
+                RemotePath = entry.RemotePath,
+                LocalPath = entry.LocalPath,
+                TotalLength = totalLength,
+                CompletedLength = entry.CompletedLength,
+                ChunkBytes = entry.ChunkBytes,
+                UpdatedAtUtc = DateTime.UtcNow
+            };
+
+            File.WriteAllText(sidecarPath, JsonSerializer.Serialize(sidecar));
+        }
+        catch (Exception ex)
+        {
+            LogService.Warn($"Could not write download sidecar {sidecarPath}: {ex.Message}");
+        }
     }
 
     private static async Task<SftpClient> ConnectWithRetryAsync(AppSettings settings, CancellationToken token)
@@ -273,13 +273,13 @@ public sealed class ParallelSftpDownloadService
         }
 
         throw new InvalidOperationException(
-            $"Could not connect to {settings.Host}:{settings.Port} after {ConnectAttempts} attempts.", lastError);
+            $"Could not connect to {settings.Host}:{settings.Port} after {ConnectAttempts} attempts.",
+            lastError);
     }
 
     public static SftpClient CreateClient(AppSettings settings)
     {
         AuthenticationMethod auth = new PasswordAuthenticationMethod(settings.Username, settings.Password);
-
         ConnectionInfo info = new ConnectionInfo(settings.Host, settings.Port, settings.Username, auth)
         {
             Timeout = TimeSpan.FromSeconds(15)
@@ -292,5 +292,39 @@ public sealed class ParallelSftpDownloadService
         };
 
         return client;
+    }
+
+    private static long ChunkLength(int chunkIndex, int chunkCount, long totalSize)
+    {
+        long chunkSize = totalSize / chunkCount;
+
+        if (chunkIndex == chunkCount - 1)
+        {
+            return totalSize - (chunkSize * (chunkCount - 1));
+        }
+
+        return chunkSize;
+    }
+
+    public static string GetSidecarPath(string localPath)
+    {
+        return localPath + SidecarSuffix;
+    }
+
+    public static string GetTempFilePath(string localPath)
+    {
+        return GetSidecarPath(localPath);
+    }
+
+    private sealed class TransferSidecar
+    {
+        public string TransferId { get; set; } = string.Empty;
+        public string Direction { get; set; } = string.Empty;
+        public string RemotePath { get; set; } = string.Empty;
+        public string LocalPath { get; set; } = string.Empty;
+        public long TotalLength { get; set; }
+        public long CompletedLength { get; set; }
+        public long[] ChunkBytes { get; set; } = Array.Empty<long>();
+        public DateTime UpdatedAtUtc { get; set; }
     }
 }
