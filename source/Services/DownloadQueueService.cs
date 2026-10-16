@@ -93,6 +93,7 @@ public static class DownloadQueueService
                     Direction = queueEntry.Direction
                 };
 
+                entry.CompletedLength = CalculateCompletedLength(entry);
                 result.Add(entry);
             }
         }
@@ -119,6 +120,29 @@ public static class DownloadQueueService
         {
             LogService.Error($"Failed to delete download queue: {ex}");
         }
+    }
+
+    private static long CalculateCompletedLength(DownloadEntry entry)
+    {
+        if (entry.TotalLength <= 0 || entry.ChunkBytes.Length == 0)
+        {
+            return 0;
+        }
+
+        int chunkCount = entry.ChunkBytes.Length;
+        long chunkSize = entry.TotalLength / chunkCount;
+        long completed = 0;
+
+        for (int i = 0; i < chunkCount; i++)
+        {
+            long chunkLength = i == chunkCount - 1
+                ? entry.TotalLength - (chunkSize * (chunkCount - 1))
+                : chunkSize;
+
+            completed += Math.Min(entry.ChunkBytes[i], chunkLength);
+        }
+
+        return Math.Min(completed, entry.TotalLength);
     }
 
     private static string GetQueueFilePath(string connectionKey)
