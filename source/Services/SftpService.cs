@@ -12,6 +12,7 @@ namespace StreamZilla.Services;
 public sealed class SftpService : IDisposable
 {
     public const string PermissionDeniedMessage = "Permission denied on the remote server.";
+    private const string UploadTempSuffix = ".streamzilla-upload";
 
     private SftpClient? _client;
     private byte[]? _lastHostKey;
@@ -23,10 +24,7 @@ public sealed class SftpService : IDisposable
 
     public bool IsConnected
     {
-        get
-        {
-            return _client != null && _client.IsConnected;
-        }
+        get { return _client != null && _client.IsConnected; }
     }
 
     public void Connect(AppSettings settings)
@@ -34,7 +32,6 @@ public sealed class SftpService : IDisposable
         Disconnect();
 
         AuthenticationMethod auth = new PasswordAuthenticationMethod(settings.Username, settings.Password);
-
         ConnectionInfo info = new ConnectionInfo(settings.Host, settings.Port, settings.Username, auth)
         {
             Timeout = TimeSpan.FromSeconds(15)
@@ -44,11 +41,7 @@ public sealed class SftpService : IDisposable
         _lastHostKey = null;
         _settings = settings;
 
-        _client.HostKeyReceived += (_, e) =>
-        {
-            _lastHostKey = e.HostKey;
-        };
-
+        _client.HostKeyReceived += (_, e) => _lastHostKey = e.HostKey;
         _client.Connect();
 
         if (!_client.IsConnected)
@@ -66,11 +59,9 @@ public sealed class SftpService : IDisposable
             return "";
         }
 
-        using (SHA256 sha = SHA256.Create())
-        {
-            byte[] hash = sha.ComputeHash(_lastHostKey);
-            return Convert.ToBase64String(hash);
-        }
+        using SHA256 sha = SHA256.Create();
+        byte[] hash = sha.ComputeHash(_lastHostKey);
+        return Convert.ToBase64String(hash);
     }
 
     public List<RemoteEntry> ListDirectory(string path)
@@ -90,21 +81,7 @@ public sealed class SftpService : IDisposable
 
             uidsToResolve.Add(file.UserId);
             gidsToResolve.Add(file.GroupId);
-
-            RemoteEntry entry = new RemoteEntry
-            {
-                Name = file.Name,
-                FullPath = file.FullName,
-                IsDirectory = file.IsDirectory,
-                Size = file.Length,
-                Owner = file.UserId.ToString(),
-                Group = file.GroupId.ToString(),
-                Permissions = FormatPermissions(file.Attributes),
-                LastModified = file.LastWriteTime,
-                Created = file.LastAccessTime
-            };
-
-            items.Add(entry);
+            items.Add(CreateRemoteEntry(file));
         }
 
         Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
@@ -117,9 +94,9 @@ public sealed class SftpService : IDisposable
                 entry.Owner = name;
             }
 
-            if (resolvedGids.TryGetValue(int.Parse(entry.Group), out string? gname))
+            if (resolvedGids.TryGetValue(int.Parse(entry.Group), out string? group))
             {
-                entry.Group = gname;
+                entry.Group = group;
             }
         }
 
@@ -127,6 +104,45 @@ public sealed class SftpService : IDisposable
             .OrderBy(x => !x.IsDirectory)
             .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    public List<RemoteEntry> ListDirectoryIsolated(AppSettings settings, string path)
+    {
+        SftpClient client = ParallelSftpDownloadService.CreateClient(settings);
+
+        try
+        {
+            client.Connect();
+
+            List<RemoteEntry> items = new List<RemoteEntry>();
+
+            foreach (SftpFile file in client.ListDirectory(path))
+            {
+                if (file.Name == "." || file.Name == "..")
+                {
+                    continue;
+                }
+
+                items.Add(CreateRemoteEntry(file));
+            }
+
+            return items
+                .OrderBy(x => !x.IsDirectory)
+                .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        finally
+        {
+            try
+            {
+                client.Disconnect();
+            }
+            catch
+            {
+            }
+
+            client.Dispose();
+        }
     }
 
     public List<RemoteEntry> ListFilesRecursive(string directory)
@@ -187,18 +203,7 @@ public sealed class SftpService : IDisposable
             {
                 uidsToResolve.Add(file.UserId);
                 gidsToResolve.Add(file.GroupId);
-                batch.Add(new RemoteEntry
-                {
-                    Name = file.Name,
-                    FullPath = file.FullName,
-                    IsDirectory = false,
-                    Size = file.Length,
-                    Owner = file.UserId.ToString(),
-                    Group = file.GroupId.ToString(),
-                    Permissions = FormatPermissions(file.Attributes),
-                    LastModified = file.LastWriteTime,
-                    Created = file.LastAccessTime
-                });
+                batch.Add(CreateRemoteEntry(file));
             }
         }
 
@@ -212,9 +217,9 @@ public sealed class SftpService : IDisposable
                 entry.Owner = name;
             }
 
-            if (resolvedGids.TryGetValue(int.Parse(entry.Group), out string? gname))
+            if (resolvedGids.TryGetValue(int.Parse(entry.Group), out string? group))
             {
-                entry.Group = gname;
+                entry.Group = group;
             }
 
             output.Add(entry);
@@ -236,23 +241,33 @@ public sealed class SftpService : IDisposable
             }
             else
             {
-                output.Add(new RemoteEntry
-                {
-                    Name = file.Name,
-                    FullPath = file.FullName,
-                    IsDirectory = false,
-                    Size = file.Length,
-                    Owner = file.UserId.ToString(),
-                    Group = file.GroupId.ToString(),
-                    Permissions = FormatPermissions(file.Attributes),
-                    LastModified = file.LastWriteTime,
-                    Created = file.LastAccessTime
-                });
+                output.Add(CreateRemoteEntry(file));
             }
         }
     }
 
-    public Task UploadFileAsync(string localPath, string remotePath, Action<long>? progress = null, CancellationToken token = default, long startOffset = 0)
+    private static RemoteEntry CreateRemoteEntry(SftpFile file)
+    {
+        return new RemoteEntry
+        {
+            Name = file.Name,
+            FullPath = file.FullName,
+            IsDirectory = file.IsDirectory,
+            Size = file.Length,
+            Owner = file.UserId.ToString(),
+            Group = file.GroupId.ToString(),
+            Permissions = FormatPermissions(file.Attributes),
+            LastModified = file.LastWriteTime,
+            Created = file.LastAccessTime
+        };
+    }
+
+    public Task UploadFileAsync(
+        string localPath,
+        string remotePath,
+        Action<long>? progress = null,
+        CancellationToken token = default,
+        long startOffset = 0)
     {
         return Task.Run(async () =>
         {
@@ -265,6 +280,7 @@ public sealed class SftpService : IDisposable
 
             long totalLength = new FileInfo(localPath).Length;
             string remoteDirectory = Path.GetDirectoryName(remotePath) ?? "/";
+            string tempPath = remotePath + UploadTempSuffix;
 
             if (remoteDirectory.Length > 0 && !remoteDirectory.Equals("/", StringComparison.Ordinal))
             {
@@ -282,24 +298,27 @@ public sealed class SftpService : IDisposable
 
             token.ThrowIfCancellationRequested();
 
+            long resumeOffset = GetUploadResumeOffset(tempPath);
+            progress?.Invoke(resumeOffset);
+
             using (FileStream source = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                if (startOffset > 0 && startOffset < totalLength)
+                if (resumeOffset > 0 && resumeOffset < totalLength)
                 {
-                    source.Seek(startOffset, SeekOrigin.Begin);
+                    source.Seek(resumeOffset, SeekOrigin.Begin);
                 }
 
-                SftpFileStream destination = _client!.OpenWrite(remotePath);
+                SftpFileStream destination = _client!.OpenWrite(tempPath);
 
-                if (startOffset > 0)
+                if (resumeOffset > 0)
                 {
-                    destination.Position = startOffset;
+                    destination.Seek(resumeOffset, SeekOrigin.Begin);
                 }
 
                 using (destination)
                 {
                     byte[] buffer = new byte[1024 * 1024];
-                    long written = startOffset;
+                    long written = resumeOffset;
 
                     while (true)
                     {
@@ -320,8 +339,36 @@ public sealed class SftpService : IDisposable
                 }
             }
 
+            token.ThrowIfCancellationRequested();
+
+            try
+            {
+                if (_client!.Exists(remotePath))
+                {
+                    _client.DeleteFile(remotePath);
+                }
+
+                _client.RenameFile(tempPath, remotePath);
+            }
+            catch (SftpPathNotFoundException)
+            {
+            }
+
             LogService.Info($"Uploaded file: {localPath} -> {remotePath} ({totalLength} bytes).");
         }, token);
+    }
+
+    private long GetUploadResumeOffset(string tempPath)
+    {
+        try
+        {
+            SftpFileAttributes attributes = _client!.GetAttributes(tempPath);
+            return attributes.IsDirectory ? 0 : attributes.Size;
+        }
+        catch (SftpPathNotFoundException)
+        {
+            return 0;
+        }
     }
 
     public long GetRemoteFileSize(string remotePath)
@@ -389,7 +436,6 @@ public sealed class SftpService : IDisposable
     public void DeleteFile(string remotePath)
     {
         EnsureConnected();
-
         _client!.DeleteFile(remotePath);
         LogService.Info($"Deleted remote file: {remotePath}");
     }
@@ -465,7 +511,6 @@ public sealed class SftpService : IDisposable
         result += attributes.OthersCanRead ? "r" : "-";
         result += attributes.OthersCanWrite ? "w" : "-";
         result += attributes.OthersCanExecute ? "x" : "-";
-
         return result;
     }
 
@@ -484,9 +529,7 @@ public sealed class SftpService : IDisposable
             }
         }
 
-        List<int> missing = uids
-            .Where(uid => !result.ContainsKey(uid))
-            .ToList();
+        List<int> missing = uids.Where(uid => !result.ContainsKey(uid)).ToList();
 
         if (missing.Count == 0 || _settings == null)
         {
@@ -503,24 +546,20 @@ public sealed class SftpService : IDisposable
                 Timeout = TimeSpan.FromSeconds(10)
             };
 
-            using (SshClient ssh = new SshClient(info))
+            using SshClient ssh = new SshClient(info);
+            ssh.Connect();
+
+            using var response = ssh.RunCommand(command);
+            string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+            for (int i = 0; i < missing.Count && i < lines.Length; i++)
             {
-                ssh.Connect();
+                string name = lines[i].Trim();
+                result[missing[i]] = name;
 
-                using (var response = ssh.RunCommand(command))
+                lock (_uidCacheLock)
                 {
-                    string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
-
-                    for (int i = 0; i < missing.Count && i < lines.Length; i++)
-                    {
-                        string name = lines[i].Trim();
-                        result[missing[i]] = name;
-
-                        lock (_uidCacheLock)
-                        {
-                            _uidCache[missing[i]] = name;
-                        }
-                    }
+                    _uidCache[missing[i]] = name;
                 }
             }
         }
@@ -546,9 +585,7 @@ public sealed class SftpService : IDisposable
             }
         }
 
-        List<int> missing = gids
-            .Where(gid => !result.ContainsKey(gid))
-            .ToList();
+        List<int> missing = gids.Where(gid => !result.ContainsKey(gid)).ToList();
 
         if (missing.Count == 0 || _settings == null)
         {
@@ -565,24 +602,20 @@ public sealed class SftpService : IDisposable
                 Timeout = TimeSpan.FromSeconds(10)
             };
 
-            using (SshClient ssh = new SshClient(info))
+            using SshClient ssh = new SshClient(info);
+            ssh.Connect();
+
+            using var response = ssh.RunCommand(command);
+            string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+            for (int i = 0; i < missing.Count && i < lines.Length; i++)
             {
-                ssh.Connect();
+                string name = lines[i].Trim();
+                result[missing[i]] = name;
 
-                using (var response = ssh.RunCommand(command))
+                lock (_gidCacheLock)
                 {
-                    string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
-
-                    for (int i = 0; i < missing.Count && i < lines.Length; i++)
-                    {
-                        string name = lines[i].Trim();
-                        result[missing[i]] = name;
-
-                        lock (_gidCacheLock)
-                        {
-                            _gidCache[missing[i]] = name;
-                        }
-                    }
+                    _gidCache[missing[i]] = name;
                 }
             }
         }
