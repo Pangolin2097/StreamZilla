@@ -190,7 +190,7 @@ public sealed class ParallelSftpDownloadService
 
                         byte[] buffer = new byte[BufferSize];
                         long position = start;
-                        long chunkWritten = entry.GetChunkBytes(chunkIndex);
+                        long chunkWritten = entry.ChunkBytes[chunkIndex];
                         long lastNotified = Environment.TickCount64;
 
                         if (chunkWritten > 0)
