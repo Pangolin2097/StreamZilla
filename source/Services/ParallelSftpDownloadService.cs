@@ -15,7 +15,7 @@ public sealed class ParallelSftpDownloadService
     private const int ConnectAttempts = 3;
     private const int ProgressIntervalMilliseconds = 150;
 
-    public event Action<long>? OnProgress;
+    public static event Action<long>? OnProgress;
 
     public async Task DownloadAsync(
         AppSettings settings,
