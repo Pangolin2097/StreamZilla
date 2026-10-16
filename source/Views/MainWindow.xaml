@@ -229,28 +229,20 @@
                           SelectedItemChanged="RemoteTree_SelectedItemChanged">
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="16"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="60"/>
-                                </Grid.ColumnDefinitions>
-                                <Image Grid.Column="0"
-                                       Source="{Binding IconImage}"
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{Binding IconImage}"
                                        Width="16"
                                        Height="16"
                                        Margin="0,0,6,0"
                                        VerticalAlignment="Center"/>
-                                <TextBlock Grid.Column="1"
-                                           Text="{Binding Name}"
+                                <TextBlock Text="{Binding Name}"
                                            VerticalAlignment="Center"/>
-                                <TextBlock Grid.Column="2"
-                                           Text="{Binding SizeDisplay}"
+                                <TextBlock Text="{Binding SizeDisplay}"
                                            Foreground="Gray"
                                            Margin="12,0,0,0"
                                            VerticalAlignment="Center"
                                            ToolTip="Size"/>
-                            </Grid>
+                            </StackPanel>
                         </HierarchicalDataTemplate>
                     </TreeView.ItemTemplate>
                 </TreeView>
