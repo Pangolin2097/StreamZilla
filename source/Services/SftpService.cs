@@ -16,6 +16,8 @@ public sealed class SftpService : IDisposable
     public const string SidecarSuffix = ".streamzilla-progress";
 
     private SftpClient? _client;
+    private SftpClient? _listClient;
+    private readonly SemaphoreSlim _listGate = new(1, 1);
     private byte[]? _lastHostKey;
     private readonly Dictionary<int, string> _uidCache = new();
     private readonly object _uidCacheLock = new();
@@ -50,7 +52,42 @@ public sealed class SftpService : IDisposable
             throw new InvalidOperationException("Could not connect to SFTP server.");
         }
 
+        _listClient = CreateListClient(settings);
+        _listClient.Connect();
+
         LogService.Info($"Connected to SFTP {settings.Host}:{settings.Port} as {settings.Username}.");
+    }
+
+    private static SftpClient CreateListClient(AppSettings settings)
+    {
+        AuthenticationMethod auth = new PasswordAuthenticationMethod(settings.Username, settings.Password);
+        ConnectionInfo info = new ConnectionInfo(settings.Host, settings.Port, settings.Username, auth)
+        {
+            Timeout = TimeSpan.FromSeconds(15)
+        };
+
+        return new SftpClient(info)
+        {
+            OperationTimeout = TimeSpan.FromSeconds(30),
+            KeepAliveInterval = TimeSpan.FromSeconds(15)
+        };
+    }
+
+    private void EnsureListConnected()
+    {
+        if (_settings == null)
+        {
+            throw new InvalidOperationException("Not connected to SFTP server.");
+        }
+
+        if (_listClient != null && _listClient.IsConnected)
+        {
+            return;
+        }
+
+        _listClient?.Dispose();
+        _listClient = CreateListClient(_settings);
+        _listClient.Connect();
     }
 
     public string GetHostKeyFingerprint()
@@ -67,64 +104,41 @@ public sealed class SftpService : IDisposable
 
     public List<RemoteEntry> ListDirectory(string path)
     {
-        EnsureConnected();
-
-        List<RemoteEntry> items = new List<RemoteEntry>();
-        HashSet<int> uidsToResolve = new();
-        HashSet<int> gidsToResolve = new();
-
-        foreach (SftpFile file in _client!.ListDirectory(path))
-        {
-            if (file.Name == "." || file.Name == "..")
-            {
-                continue;
-            }
-
-            uidsToResolve.Add(file.UserId);
-            gidsToResolve.Add(file.GroupId);
-            items.Add(CreateRemoteEntry(file));
-        }
-
-        Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
-        Dictionary<int, string> resolvedGids = ResolveGids(gidsToResolve);
-
-        foreach (RemoteEntry entry in items)
-        {
-            if (resolvedUids.TryGetValue(int.Parse(entry.Owner), out string? name))
-            {
-                entry.Owner = name;
-            }
-
-            if (resolvedGids.TryGetValue(int.Parse(entry.Group), out string? group))
-            {
-                entry.Group = group;
-            }
-        }
-
-        return items
-            .OrderBy(x => !x.IsDirectory)
-            .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
-
-    public List<RemoteEntry> ListDirectoryIsolated(AppSettings settings, string path)
-    {
-        SftpClient client = ParallelSftpDownloadService.CreateClient(settings);
+        EnsureListConnected();
+        _listGate.Wait();
 
         try
         {
-            client.Connect();
-
             List<RemoteEntry> items = new List<RemoteEntry>();
+            HashSet<int> uidsToResolve = new();
+            HashSet<int> gidsToResolve = new();
 
-            foreach (SftpFile file in client.ListDirectory(path))
+            foreach (SftpFile file in _listClient!.ListDirectory(path))
             {
                 if (file.Name == "." || file.Name == "..")
                 {
                     continue;
                 }
 
+                uidsToResolve.Add(file.UserId);
+                gidsToResolve.Add(file.GroupId);
                 items.Add(CreateRemoteEntry(file));
+            }
+
+            Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
+            Dictionary<int, string> resolvedGids = ResolveGids(gidsToResolve);
+
+            foreach (RemoteEntry entry in items)
+            {
+                if (resolvedUids.TryGetValue(int.Parse(entry.Owner), out string? name))
+                {
+                    entry.Owner = name;
+                }
+
+                if (resolvedGids.TryGetValue(int.Parse(entry.Group), out string? group))
+                {
+                    entry.Group = group;
+                }
             }
 
             return items
@@ -134,62 +148,47 @@ public sealed class SftpService : IDisposable
         }
         finally
         {
-            try
-            {
-                client.Disconnect();
-            }
-            catch
-            {
-            }
-
-            client.Dispose();
+            _listGate.Release();
         }
+    }
+
+    public List<RemoteEntry> ListDirectoryIsolated(AppSettings settings, string path)
+    {
+        // Retained for compatibility. Directory listings use the persistent dedicated
+        // listing connection rather than opening a new SFTP connection for every call.
+        return ListDirectory(path);
     }
 
     public List<RemoteEntry> ListFilesRecursive(string directory)
     {
-        EnsureConnected();
-
-        List<RemoteEntry> result = new List<RemoteEntry>();
-        Walk(directory, result);
-        return result;
-    }
-
-    public List<RemoteEntry> ListFilesRecursiveIsolated(AppSettings settings, string directory)
-    {
-        SftpClient client = ParallelSftpDownloadService.CreateClient(settings);
+        EnsureListConnected();
+        _listGate.Wait();
 
         try
         {
-            client.Connect();
-
             List<RemoteEntry> result = new List<RemoteEntry>();
-            WalkWithClient(client, directory, result);
+            Walk(directory, result);
             return result;
         }
         finally
         {
-            try
-            {
-                client.Disconnect();
-            }
-            catch
-            {
-            }
-
-            client.Dispose();
+            _listGate.Release();
         }
+    }
+
+    public List<RemoteEntry> ListFilesRecursiveIsolated(AppSettings settings, string directory)
+    {
+        // Retained for compatibility. Uses the persistent dedicated listing connection.
+        return ListFilesRecursive(directory);
     }
 
     private void Walk(string directory, List<RemoteEntry> output)
     {
-        EnsureConnected();
-
         HashSet<int> uidsToResolve = new();
         HashSet<int> gidsToResolve = new();
         List<RemoteEntry> batch = new List<RemoteEntry>();
 
-        foreach (SftpFile file in _client!.ListDirectory(directory))
+        foreach (SftpFile file in _listClient!.ListDirectory(directory))
         {
             if (file.Name == "." || file.Name == "..")
             {
@@ -224,26 +223,6 @@ public sealed class SftpService : IDisposable
             }
 
             output.Add(entry);
-        }
-    }
-
-    private static void WalkWithClient(SftpClient client, string directory, List<RemoteEntry> output)
-    {
-        foreach (SftpFile file in client.ListDirectory(directory))
-        {
-            if (file.Name == "." || file.Name == "..")
-            {
-                continue;
-            }
-
-            if (file.IsDirectory)
-            {
-                WalkWithClient(client, file.FullName, output);
-            }
-            else
-            {
-                output.Add(CreateRemoteEntry(file));
-            }
         }
     }
 
@@ -359,8 +338,8 @@ public sealed class SftpService : IDisposable
             }
 
             token.ThrowIfCancellationRequested();
-
             DeleteRemoteFileIfExists(sidecarPath);
+
             LogService.Info($"Uploaded file: {localPath} -> {remotePath} ({totalLength} bytes).");
         }, token);
     }
@@ -685,28 +664,48 @@ public sealed class SftpService : IDisposable
 
     public void Disconnect()
     {
-        if (_client == null)
+        if (_listClient != null)
         {
-            return;
+            try
+            {
+                _listClient.Disconnect();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _listClient.Dispose();
+            }
+            catch
+            {
+            }
+
+            _listClient = null;
         }
 
-        try
+        if (_client != null)
         {
-            _client.Disconnect();
-        }
-        catch
-        {
+            try
+            {
+                _client.Disconnect();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _client.Dispose();
+            }
+            catch
+            {
+            }
+
+            _client = null;
         }
 
-        try
-        {
-            _client.Dispose();
-        }
-        catch
-        {
-        }
-
-        _client = null;
         _lastHostKey = null;
         LogService.Info("Disconnected from SFTP.");
     }
