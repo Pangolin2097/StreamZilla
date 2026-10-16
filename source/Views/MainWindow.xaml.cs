@@ -25,30 +25,21 @@ public partial class MainWindow : Window
         DataContext = _viewModel;
 
         PasswordBox.Password = _viewModel.Password;
-        PasswordBox.PasswordChanged += (_, _) => { _viewModel.Password = PasswordBox.Password; };
+        PasswordBox.PasswordChanged += (_, _) => _viewModel.Password = PasswordBox.Password;
 
         Loaded += MainWindow_Loaded;
-
         _viewModel.ScrollToRemoteItemRequested += ScrollRemoteItemIntoView;
     }
 
-    public string LogPath
-    {
-        get
-        {
-            return LogService.FilePath;
-        }
-    }
+    public string LogPath => LogService.FilePath;
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         Dispatcher.BeginInvoke(() =>
         {
-            LocalItemViewModel? lastLocal = _viewModel.LastLocalFolder;
-
-            if (lastLocal != null)
+            if (_viewModel.LastLocalFolder is LocalItemViewModel last)
             {
-                ScrollLocalItemIntoView(lastLocal);
+                ScrollLocalItemIntoView(last);
             }
         }, DispatcherPriority.Loaded);
     }
@@ -64,13 +55,10 @@ public partial class MainWindow : Window
         foreach (object root in LocalTree.Items)
         {
             if (root is LocalItemViewModel rootItem &&
-                TryFindLocalContainerRecursive(LocalTree.ItemContainerGenerator, rootItem, item, out TreeViewItem? found))
+                TryFindLocalContainer(LocalTree.ItemContainerGenerator, rootItem, item, out TreeViewItem? found) &&
+                found != null)
             {
-                if (found != null)
-                {
-                    ScrollItemToCenter(found, LocalTree);
-                }
-
+                ScrollItemToCenter(found, LocalTree);
                 return;
             }
         }
@@ -87,13 +75,10 @@ public partial class MainWindow : Window
         foreach (object root in RemoteTree.Items)
         {
             if (root is RemoteItemViewModel rootItem &&
-                TryFindRemoteContainerRecursive(RemoteTree.ItemContainerGenerator, rootItem, item, out TreeViewItem? found))
+                TryFindRemoteContainer(RemoteTree.ItemContainerGenerator, rootItem, item, out TreeViewItem? found) &&
+                found != null)
             {
-                if (found != null)
-                {
-                    ScrollItemToCenter(found, RemoteTree);
-                }
-
+                ScrollItemToCenter(found, RemoteTree);
                 return;
             }
         }
@@ -114,23 +99,21 @@ public partial class MainWindow : Window
 
             GeneralTransform transform = container.TransformToVisual(scroll);
             Rect bounds = transform.TransformBounds(new Rect(0, 0, container.ActualWidth, container.ActualHeight));
+            double target = scroll.VerticalOffset + bounds.Top - (scroll.ViewportHeight / 2.0) + (bounds.Height / 2.0);
 
-            double targetOffset = scroll.VerticalOffset + bounds.Top - (scroll.ViewportHeight / 2.0) + (bounds.Height / 2.0);
-            scroll.ScrollToVerticalOffset(Math.Max(0, targetOffset));
+            scroll.ScrollToVerticalOffset(Math.Max(0, target));
         }, DispatcherPriority.Loaded);
     }
 
     private static ScrollViewer? FindScrollViewer(DependencyObject parent)
     {
-        int childCount = VisualTreeHelper.GetChildrenCount(parent);
-
-        for (int i = 0; i < childCount; i++)
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
         {
             DependencyObject child = VisualTreeHelper.GetChild(parent, i);
 
-            if (child is ScrollViewer scrollViewer)
+            if (child is ScrollViewer viewer)
             {
-                return scrollViewer;
+                return viewer;
             }
 
             ScrollViewer? result = FindScrollViewer(child);
@@ -144,7 +127,7 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private static bool TryFindLocalContainerRecursive(
+    private static bool TryFindLocalContainer(
         ItemContainerGenerator generator,
         LocalItemViewModel current,
         LocalItemViewModel target,
@@ -163,7 +146,7 @@ public partial class MainWindow : Window
             foreach (object child in current.Children)
             {
                 if (child is LocalItemViewModel childItem &&
-                    TryFindLocalContainerRecursive(container.ItemContainerGenerator, childItem, target, out found))
+                    TryFindLocalContainer(container.ItemContainerGenerator, childItem, target, out found))
                 {
                     return true;
                 }
@@ -173,7 +156,7 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private static bool TryFindRemoteContainerRecursive(
+    private static bool TryFindRemoteContainer(
         ItemContainerGenerator generator,
         RemoteItemViewModel current,
         RemoteItemViewModel target,
@@ -192,7 +175,7 @@ public partial class MainWindow : Window
             foreach (object child in current.Children)
             {
                 if (child is RemoteItemViewModel childItem &&
-                    TryFindRemoteContainerRecursive(container.ItemContainerGenerator, childItem, target, out found))
+                    TryFindRemoteContainer(container.ItemContainerGenerator, childItem, target, out found))
                 {
                     return true;
                 }
@@ -208,9 +191,9 @@ public partial class MainWindow : Window
 
         while (current != null)
         {
-            if (current is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteItemViewModel item)
+            if (current is TreeViewItem item && item.DataContext is RemoteItemViewModel remote)
             {
-                return item;
+                return remote;
             }
 
             current = VisualTreeHelper.GetParent(current);
@@ -225,9 +208,9 @@ public partial class MainWindow : Window
 
         while (current != null)
         {
-            if (current is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalItemViewModel item)
+            if (current is TreeViewItem item && item.DataContext is LocalItemViewModel local)
             {
-                return item;
+                return local;
             }
 
             current = VisualTreeHelper.GetParent(current);
@@ -238,17 +221,17 @@ public partial class MainWindow : Window
 
     private void RemoteItem_Expanded(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteItemViewModel item)
+        if (e.OriginalSource is TreeViewItem item && item.DataContext is RemoteItemViewModel remote)
         {
-            _viewModel.OnRemoteItemExpanded(item);
+            _viewModel.OnRemoteItemExpanded(remote);
         }
     }
 
     private void RemoteItem_Collapsed(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteItemViewModel item)
+        if (e.OriginalSource is TreeViewItem item && item.DataContext is RemoteItemViewModel remote)
         {
-            _viewModel.OnRemoteItemCollapsed(item);
+            _viewModel.OnRemoteItemCollapsed(remote);
         }
     }
 
@@ -257,18 +240,32 @@ public partial class MainWindow : Window
         _viewModel.OnRemoteSelectionChanged(e.NewValue as RemoteItemViewModel);
     }
 
-    private void RemoteTree_MouseDown(object sender, MouseButtonEventArgs e)
+    private void RemoteTree_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        _dragStartPoint = e.GetPosition(null);
-
-        if (e.OriginalSource is not TextBlock)
+        if (e.Key != Key.Delete)
         {
             return;
         }
 
-        RemoteItemViewModel? item = GetRemoteItemUnderMouse(e.OriginalSource);
+        List<RemoteItemViewModel> items = _viewModel.GetHighlightedRemoteItems();
 
-        if (item == null)
+        if (items.Count == 0 && RemoteTree.SelectedItem is RemoteItemViewModel selected)
+        {
+            items.Add(selected);
+        }
+
+        if (items.Count > 0)
+        {
+            _viewModel.DeleteRemoteItems(items);
+            e.Handled = true;
+        }
+    }
+
+    private void RemoteTree_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragStartPoint = e.GetPosition(null);
+
+        if (e.OriginalSource is not TextBlock || GetRemoteItemUnderMouse(e.OriginalSource) is not RemoteItemViewModel item)
         {
             return;
         }
@@ -278,14 +275,8 @@ public partial class MainWindow : Window
 
     private void RemoteTree_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_dragging || e.LeftButton != MouseButtonState.Pressed)
-        {
-            return;
-        }
-
-        RemoteItemViewModel? underMouse = GetRemoteItemUnderMouse(e.OriginalSource);
-
-        if (underMouse == null)
+        if (_dragging || e.LeftButton != MouseButtonState.Pressed ||
+            GetRemoteItemUnderMouse(e.OriginalSource) is not RemoteItemViewModel underMouse)
         {
             return;
         }
@@ -299,19 +290,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<RemoteItemViewModel> selectedItems = _viewModel.GetHighlightedRemoteItems();
+        List<RemoteItemViewModel> items = _viewModel.GetHighlightedRemoteItems();
 
-        if (selectedItems.Count == 0)
+        if (items.Count == 0)
         {
-            selectedItems.Add(underMouse);
+            items.Add(underMouse);
         }
 
         _dragging = true;
 
         try
         {
-            DataObject data = new DataObject();
-            data.SetData("StreamZillaRemoteItems", selectedItems);
+            DataObject data = new();
+            data.SetData("StreamZillaRemoteItems", items);
             DragDrop.DoDragDrop(RemoteTree, data, DragDropEffects.Copy);
         }
         finally
@@ -322,15 +313,7 @@ public partial class MainWindow : Window
 
     private void LocalTree_DragOver(object sender, DragEventArgs e)
     {
-        if (e.Data.GetDataPresent("StreamZillaRemoteItems"))
-        {
-            e.Effects = DragDropEffects.Copy;
-        }
-        else
-        {
-            e.Effects = DragDropEffects.None;
-        }
-
+        e.Effects = e.Data.GetDataPresent("StreamZillaRemoteItems") ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
     }
 
@@ -341,13 +324,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        LocalItemViewModel? target = GetLocalItemUnderMouse(e.OriginalSource);
-
-        if (target == null)
-        {
-            target = _viewModel.LastLocalFolder;
-        }
-
+        LocalItemViewModel? target = GetLocalItemUnderMouse(e.OriginalSource) ?? _viewModel.LastLocalFolder;
         List<RemoteItemViewModel> items = (List<RemoteItemViewModel>)e.Data.GetData("StreamZillaRemoteItems");
 
         _viewModel.HandleRemoteDrop(items, target);
@@ -357,14 +334,7 @@ public partial class MainWindow : Window
     {
         _dragStartPoint = e.GetPosition(null);
 
-        if (e.OriginalSource is not TextBlock)
-        {
-            return;
-        }
-
-        LocalItemViewModel? item = GetLocalItemUnderMouse(e.OriginalSource);
-
-        if (item == null)
+        if (e.OriginalSource is not TextBlock || GetLocalItemUnderMouse(e.OriginalSource) is not LocalItemViewModel item)
         {
             return;
         }
@@ -374,14 +344,8 @@ public partial class MainWindow : Window
 
     private void LocalTree_MouseMove(object sender, MouseEventArgs e)
     {
-        if (_dragging || e.LeftButton != MouseButtonState.Pressed)
-        {
-            return;
-        }
-
-        LocalItemViewModel? underMouse = GetLocalItemUnderMouse(e.OriginalSource);
-
-        if (underMouse == null)
+        if (_dragging || e.LeftButton != MouseButtonState.Pressed ||
+            GetLocalItemUnderMouse(e.OriginalSource) is not LocalItemViewModel underMouse)
         {
             return;
         }
@@ -395,19 +359,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<LocalItemViewModel> selectedItems = _viewModel.GetHighlightedLocalItems();
+        List<LocalItemViewModel> items = _viewModel.GetHighlightedLocalItems();
 
-        if (selectedItems.Count == 0)
+        if (items.Count == 0)
         {
-            selectedItems.Add(underMouse);
+            items.Add(underMouse);
         }
 
         _dragging = true;
 
         try
         {
-            DataObject data = new DataObject();
-            data.SetData("StreamZillaLocalItems", selectedItems);
+            DataObject data = new();
+            data.SetData("StreamZillaLocalItems", items);
             DragDrop.DoDragDrop(LocalTree, data, DragDropEffects.Copy);
         }
         finally
@@ -418,15 +382,7 @@ public partial class MainWindow : Window
 
     private void RemoteTree_DragOver(object sender, DragEventArgs e)
     {
-        if (e.Data.GetDataPresent("StreamZillaLocalItems"))
-        {
-            e.Effects = DragDropEffects.Copy;
-        }
-        else
-        {
-            e.Effects = DragDropEffects.None;
-        }
-
+        e.Effects = e.Data.GetDataPresent("StreamZillaLocalItems") ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
     }
 
@@ -438,12 +394,6 @@ public partial class MainWindow : Window
         }
 
         RemoteItemViewModel? target = GetRemoteItemUnderMouse(e.OriginalSource);
-
-        if (target == null)
-        {
-            target = null;
-        }
-
         List<LocalItemViewModel> items = (List<LocalItemViewModel>)e.Data.GetData("StreamZillaLocalItems");
 
         _viewModel.HandleLocalDrop(items, target);
@@ -451,17 +401,17 @@ public partial class MainWindow : Window
 
     private void LocalItem_Expanded(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalItemViewModel item)
+        if (e.OriginalSource is TreeViewItem item && item.DataContext is LocalItemViewModel local)
         {
-            _viewModel.OnLocalItemExpanded(item);
+            _viewModel.OnLocalItemExpanded(local);
         }
     }
 
     private void LocalItem_Collapsed(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalItemViewModel item)
+        if (e.OriginalSource is TreeViewItem item && item.DataContext is LocalItemViewModel local)
         {
-            _viewModel.OnLocalItemCollapsed(item);
+            _viewModel.OnLocalItemCollapsed(local);
         }
     }
 
@@ -477,9 +427,16 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (LocalTree.SelectedItem is LocalItemViewModel item)
+        List<LocalItemViewModel> items = _viewModel.GetHighlightedLocalItems();
+
+        if (items.Count == 0 && LocalTree.SelectedItem is LocalItemViewModel selected)
         {
-            _viewModel.DeleteLocalItem(item);
+            items.Add(selected);
+        }
+
+        if (items.Count > 0)
+        {
+            _viewModel.DeleteLocalItems(items);
             e.Handled = true;
         }
     }

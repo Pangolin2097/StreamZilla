@@ -1307,10 +1307,10 @@ public class MainViewModel : ViewModelBase
         Downloads.Add(item);
 
         _pendingQueue.Add(item);
-        StartNextQueuedDownload();
+        StartNextQueuedTransfer();
     }
 
-    private void StartNextQueuedDownload()
+    private void StartNextQueuedTransfer()
     {
         int max = Math.Clamp(_settings.MaxConcurrentDownloads, 1, 8);
 
@@ -1319,7 +1319,7 @@ public class MainViewModel : ViewModelBase
             DownloadItemViewModel next = _pendingQueue[0];
             _pendingQueue.RemoveAt(0);
 
-            if (next.IsFinished || Downloads.Contains(next) == false)
+            if (next.IsFinished || !_downloads.Contains(next))
             {
                 continue;
             }
@@ -1327,33 +1327,55 @@ public class MainViewModel : ViewModelBase
             CancellationTokenSource cts = new CancellationTokenSource();
             _cancellationTokens[next.Entry.Id] = cts;
             _activeDownloadIds.Add(next.Entry.Id);
-            next.Status = "Active";
 
-            _ = RunDownloadAsync(next, cts.Token);
+            next.Status = "Active";
+            _ = RunTransferAsync(next, cts.Token);
         }
     }
 
-    private async Task RunDownloadAsync(DownloadItemViewModel item, CancellationToken token)
+    private async Task RunTransferAsync(DownloadItemViewModel item, CancellationToken token)
     {
         try
         {
-            await _downloader.DownloadAsync(_settings, item.RemoteFile, item.LocalPath, _settings.ParallelConnections, item.Entry, token);
+            if (item.Entry.Direction == TransferDirection.Upload)
+            {
+                long lastReported = 0;
+                DateTime lastUpdate = DateTime.UtcNow;
+
+                await _sftp.UploadFileAsync(
+                    item.LocalPath,
+                    item.RemotePath,
+                    progress => UpdateTransferProgress(item, progress, ref lastReported, ref lastUpdate),
+                    token,
+                    startOffset: 0);
+            }
+            else
+            {
+                await _downloader.DownloadAsync(
+                    _settings,
+                    item.RemoteFile,
+                    item.LocalPath,
+                    _settings.ParallelConnections,
+                    item.Entry,
+                    token);
+            }
 
             item.SyncStatus();
             item.RefreshProgress();
+            LogService.Info($"Transfer complete: {item.RemotePath}");
         }
         catch (OperationCanceledException)
         {
             item.Status = "Paused";
             item.DownloadSpeed = 0;
-            LogService.Info($"Download paused: {item.RemotePath}");
+            LogService.Info($"Transfer paused: {item.RemotePath}");
         }
         catch (Exception ex)
         {
             item.Status = "Error";
             item.ErrorMessage = ex.Message;
             item.DownloadSpeed = 0;
-            LogService.Error($"Download failed for {item.RemotePath}: {ex}");
+            LogService.Error($"Transfer failed for {item.RemotePath}: {ex}");
         }
         finally
         {
@@ -1363,9 +1385,37 @@ public class MainViewModel : ViewModelBase
             OnPropertyChanged(nameof(TotalSpeedDisplay));
             OnPropertyChanged(nameof(QueueCountDisplay));
             OnPropertyChanged(nameof(TotalSizeDisplay));
+
             SaveQueue();
-            StartNextQueuedDownload();
+            StartNextQueuedTransfer();
         }
+    }
+
+    private void UpdateTransferProgress(
+        DownloadItemViewModel item,
+        long progress,
+        ref long lastReported,
+        ref DateTime lastUpdate)
+    {
+        long delta = progress - lastReported;
+        DateTime now = DateTime.UtcNow;
+
+        if (now - lastUpdate < TimeSpan.FromMilliseconds(200) && progress < item.Entry.TotalLength)
+        {
+            return;
+        }
+
+        item.CompletedLength = progress;
+
+        double seconds = (now - lastUpdate).TotalSeconds;
+        if (seconds > 0)
+        {
+            item.DownloadSpeed = (long)(delta / seconds);
+        }
+
+        lastReported = progress;
+        lastUpdate = now;
+        item.RefreshProgress();
     }
 
     private void LoadPersistedDownloads()
@@ -1474,7 +1524,7 @@ public class MainViewModel : ViewModelBase
 
         if (!_sftp.IsConnected)
         {
-            _dialogs.ShowInformation("Resume", "Connect to the SFTP server first, then resume the download.");
+            _dialogs.ShowInformation("Resume", "Connect to the SFTP server first, then resume the transfer.");
             return;
         }
 
@@ -1485,7 +1535,7 @@ public class MainViewModel : ViewModelBase
             _pendingQueue.Add(item);
         }
 
-        StartNextQueuedDownload();
+        StartNextQueuedTransfer();
     }
 
     public void RemoveDownload(DownloadItemViewModel item)
@@ -1522,7 +1572,7 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(QueueCountDisplay));
         OnPropertyChanged(nameof(TotalSizeDisplay));
         SaveQueue();
-        StartNextQueuedDownload();
+        StartNextQueuedTransfer();
         LogService.Info($"Removed download from list: {item.RemotePath}");
     }
 
@@ -1703,6 +1753,91 @@ public class MainViewModel : ViewModelBase
         }
     }
 
+    public void DeleteRemoteItems(IList? items)
+    {
+        List<RemoteItemViewModel> remoteItems = items?.OfType<RemoteItemViewModel>().ToList() ?? new List<RemoteItemViewModel>();
+
+        if (remoteItems.Count == 0)
+        {
+            return;
+        }
+
+        string message = remoteItems.Count == 1
+            ? $"Delete remote item '{remoteItems[0].Name}'?"
+            : $"Delete {remoteItems.Count} remote items?";
+
+        if (!_dialogs.Confirm("Confirm delete", message))
+        {
+            return;
+        }
+
+        foreach (RemoteItemViewModel item in remoteItems.ToList())
+        {
+            try
+            {
+                _sftp.DeleteDirectory(item.FullPath);
+
+                if (item.Parent != null)
+                {
+                    item.Parent.Children.Remove(item);
+                }
+
+                LogService.Info($"Deleted remote item: {item.FullPath}");
+            }
+            catch (Exception ex)
+            {
+                LogService.Error($"Delete remote item failed: {ex}");
+                _dialogs.ShowError("Delete error", ex.Message);
+            }
+        }
+    }
+
+    public void DeleteLocalItems(IList? items)
+    {
+        List<LocalItemViewModel> localItems = items?.OfType<LocalItemViewModel>().Where(x => !x.IsDrive).ToList() ?? new List<LocalItemViewModel>();
+
+        if (localItems.Count == 0)
+        {
+            return;
+        }
+
+        string message = localItems.Count == 1
+            ? $"Delete '{localItems[0].Name}'?"
+            : $"Delete {localItems.Count} local items?";
+
+        if (!_dialogs.Confirm("Confirm delete", message))
+        {
+            return;
+        }
+
+        foreach (LocalItemViewModel item in localItems.ToList())
+        {
+            try
+            {
+                if (item.IsDirectory)
+                {
+                    Directory.Delete(item.FullPath, true);
+                }
+                else
+                {
+                    File.Delete(item.FullPath);
+                }
+
+                if (item.Parent != null)
+                {
+                    item.Parent.Children.Remove(item);
+                }
+
+                LogService.Info($"Deleted local item: {item.FullPath}");
+            }
+            catch (Exception ex)
+            {
+                LogService.Error($"Delete failed: {ex}");
+                _dialogs.ShowError("Delete error", ex.Message);
+            }
+        }
+    }
+
     private void UploadToRemote(RemoteItemViewModel target)
     {
         RemoteItemViewModel? directory = target.IsDirectory ? target : target.Parent;
@@ -1745,66 +1880,20 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private void StartUpload(DownloadEntry entry, DownloadItemViewModel itemVm, string localPath, string remotePath)
+    private void StartUpload(
+        DownloadEntry entry,
+        DownloadItemViewModel itemVm,
+        string localPath,
+        string remotePath)
     {
-        CancellationTokenSource cts = new CancellationTokenSource();
-        _cancellationTokens[entry.Id] = cts;
-        _activeDownloadIds.Add(entry.Id);
+        itemVm.Status = "Queued";
 
-        itemVm.Status = "Active";
-
-        long lastReported = 0;
-        DateTime lastUpdate = DateTime.UtcNow;
-
-        Task.Run(async () =>
+        if (!_pendingQueue.Contains(itemVm))
         {
-            try
-            {
-                await _sftp.UploadFileAsync(
-                    localPath,
-                    remotePath,
-                    progress =>
-                    {
-                        long delta = progress - lastReported;
-                        DateTime now = DateTime.UtcNow;
+            _pendingQueue.Add(itemVm);
+        }
 
-                        if (now - lastUpdate >= TimeSpan.FromMilliseconds(200) || delta > 0)
-                        {
-                            itemVm.CompletedLength = progress;
-                            double seconds = (now - lastUpdate).TotalSeconds;
-
-                            if (seconds > 0)
-                            {
-                                itemVm.DownloadSpeed = (long)(delta / seconds);
-                            }
-
-                            lastReported = progress;
-                            lastUpdate = now;
-                            itemVm.RefreshProgress();
-                        }
-                    },
-                    cts.Token);
-
-                itemVm.Status = "Complete";
-                LogService.Info($"Upload complete: {localPath} -> {remotePath}");
-            }
-            catch (OperationCanceledException)
-            {
-                itemVm.Status = "Paused";
-                LogService.Info($"Upload paused: {localPath}");
-            }
-            catch (Exception ex)
-            {
-                itemVm.Status = "Failed";
-                itemVm.ErrorMessage = ex.Message;
-                LogService.Error($"Upload failed: {ex}");
-            }
-            finally
-            {
-                _activeDownloadIds.Remove(entry.Id);
-                _cancellationTokens.Remove(entry.Id);
-            }
-        }, cts.Token);
+        StartNextQueuedTransfer();
     }
 
     private void NewRemoteFolder(RemoteItemViewModel target)

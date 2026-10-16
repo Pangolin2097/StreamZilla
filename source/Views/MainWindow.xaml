@@ -226,6 +226,7 @@
                           DragOver="RemoteTree_DragOver"
                           PreviewMouseLeftButtonDown="RemoteTree_MouseDown"
                           MouseMove="RemoteTree_MouseMove"
+                          PreviewKeyDown="RemoteTree_PreviewKeyDown"
                           SelectedItemChanged="RemoteTree_SelectedItemChanged">
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
