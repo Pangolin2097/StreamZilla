@@ -107,10 +107,9 @@ public sealed class SftpService : IDisposable
             items.Add(entry);
         }
 
-        // Resolve UIDs to usernames
         Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
-        // Resolve GIDs to group names
         Dictionary<int, string> resolvedGids = ResolveGids(gidsToResolve);
+
         foreach (RemoteEntry entry in items)
         {
             if (resolvedUids.TryGetValue(int.Parse(entry.Owner), out string? name))
@@ -139,8 +138,6 @@ public sealed class SftpService : IDisposable
         return result;
     }
 
-    // Uses its own dedicated connection so directory scans never contend with the
-    // main connection (used by the tree refresh timer) or with each other.
     public List<RemoteEntry> ListFilesRecursiveIsolated(AppSettings settings, string directory)
     {
         SftpClient client = ParallelSftpDownloadService.CreateClient(settings);
@@ -207,6 +204,7 @@ public sealed class SftpService : IDisposable
 
         Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
         Dictionary<int, string> resolvedGids = ResolveGids(gidsToResolve);
+
         foreach (RemoteEntry entry in batch)
         {
             if (resolvedUids.TryGetValue(int.Parse(entry.Owner), out string? name))
@@ -225,10 +223,6 @@ public sealed class SftpService : IDisposable
 
     private static void WalkWithClient(SftpClient client, string directory, List<RemoteEntry> output)
     {
-        HashSet<int> uidsToResolve = new();
-        HashSet<int> gidsToResolve = new();
-        List<RemoteEntry> batch = new List<RemoteEntry>();
-
         foreach (SftpFile file in client.ListDirectory(directory))
         {
             if (file.Name == "." || file.Name == "..")
@@ -242,9 +236,7 @@ public sealed class SftpService : IDisposable
             }
             else
             {
-                uidsToResolve.Add(file.UserId);
-                gidsToResolve.Add(file.GroupId);
-                batch.Add(new RemoteEntry
+                output.Add(new RemoteEntry
                 {
                     Name = file.Name,
                     FullPath = file.FullName,
@@ -257,12 +249,6 @@ public sealed class SftpService : IDisposable
                     Created = file.LastAccessTime
                 });
             }
-        }
-
-        // Resolve UIDs to usernames (best effort, no SSH client available here)
-        foreach (RemoteEntry entry in batch)
-        {
-            output.Add(entry);
         }
     }
 
@@ -282,9 +268,6 @@ public sealed class SftpService : IDisposable
 
             if (remoteDirectory.Length > 0 && !remoteDirectory.Equals("/", StringComparison.Ordinal))
             {
-                // Use Exists (SFTP stat) to check directory existence.
-                // If it doesn't exist, create it. If permission is denied on stat,
-                // the directory exists — just proceed to the write attempt.
                 try
                 {
                     if (!_client!.Exists(remoteDirectory))
@@ -292,9 +275,8 @@ public sealed class SftpService : IDisposable
                         CreateDirectory(remoteDirectory);
                     }
                 }
-                catch (Renci.SshNet.Common.SftpPermissionDeniedException)
+                catch (SftpPermissionDeniedException)
                 {
-                    // Path exists (stat denied) — proceed to write.
                 }
             }
 
@@ -304,15 +286,11 @@ public sealed class SftpService : IDisposable
             {
                 if (startOffset > 0 && startOffset < totalLength)
                 {
-                    // Resuming: seek source to the offset
                     source.Seek(startOffset, SeekOrigin.Begin);
                 }
 
-                // SSH.NET's SftpClient exposes only OpenRead/OpenWrite (no OpenAppend).
-                // OpenWrite opens for writing and creates the file if missing; the
-                // returned SftpFileStream supports Seek/Position, so for a resume we
-                // open for write then seek to the resume offset.
                 SftpFileStream destination = _client!.OpenWrite(remotePath);
+
                 if (startOffset > 0)
                 {
                     destination.Position = startOffset;
@@ -326,6 +304,7 @@ public sealed class SftpService : IDisposable
                     while (true)
                     {
                         token.ThrowIfCancellationRequested();
+
                         int read = source.Read(buffer, 0, buffer.Length);
 
                         if (read <= 0)
@@ -345,6 +324,21 @@ public sealed class SftpService : IDisposable
         }, token);
     }
 
+    public long GetRemoteFileSize(string remotePath)
+    {
+        EnsureConnected();
+
+        try
+        {
+            SftpFileAttributes attributes = _client!.GetAttributes(remotePath);
+            return attributes.IsDirectory ? 0 : attributes.Size;
+        }
+        catch (SftpPathNotFoundException)
+        {
+            return 0;
+        }
+    }
+
     public void CreateDirectory(string remotePath)
     {
         EnsureConnected();
@@ -354,7 +348,6 @@ public sealed class SftpService : IDisposable
             throw new ArgumentException("A remote directory path is required.", nameof(remotePath));
         }
 
-        // Quick check: if the target already exists as a directory, nothing to do.
         if (IsRemoteDirectory(remotePath))
         {
             return;
@@ -383,10 +376,8 @@ public sealed class SftpService : IDisposable
                 _client!.CreateDirectory(candidate);
                 LogService.Info($"Created remote directory: {candidate}");
             }
-            catch (Renci.SshNet.Common.SftpPermissionDeniedException)
+            catch (SftpPermissionDeniedException)
             {
-                // If we can't create it, the directory likely already exists
-                // (we just lack permission to list it). Proceed to the next part.
                 current = candidate;
                 continue;
             }
@@ -423,19 +414,16 @@ public sealed class SftpService : IDisposable
 
         try
         {
-            // Exists uses the SFTP stat request — works without read permission
-            // on the directory itself (unlike ListDirectory).
-            return _client!.Exists(remotePath);
+            SftpFileAttributes attributes = _client!.GetAttributes(remotePath);
+            return attributes.IsDirectory;
         }
         catch (SftpPathNotFoundException)
         {
             return false;
         }
-        catch (Renci.SshNet.Common.SftpPermissionDeniedException)
+        catch (SftpPermissionDeniedException)
         {
-            // Permission denied on stat means the path exists but we can't stat it.
-            // Treat it as existing (best effort).
-            return true;
+            return false;
         }
     }
 
@@ -505,7 +493,6 @@ public sealed class SftpService : IDisposable
             return result;
         }
 
-        // Build a single shell command: id -un 1000; id -un 1001; ...
         string command = string.Join(";", missing.Select(uid => $"id -un {uid}"));
 
         try
@@ -519,6 +506,7 @@ public sealed class SftpService : IDisposable
             using (SshClient ssh = new SshClient(info))
             {
                 ssh.Connect();
+
                 using (var response = ssh.RunCommand(command))
                 {
                     string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -538,7 +526,6 @@ public sealed class SftpService : IDisposable
         }
         catch
         {
-            // If SSH is not available or the command fails, keep the numeric UID.
         }
 
         return result;
@@ -568,7 +555,6 @@ public sealed class SftpService : IDisposable
             return result;
         }
 
-        // Build a single shell command: id -gn 1000; id -gn 1001; ...
         string command = string.Join(";", missing.Select(gid => $"id -gn {gid}"));
 
         try
@@ -582,6 +568,7 @@ public sealed class SftpService : IDisposable
             using (SshClient ssh = new SshClient(info))
             {
                 ssh.Connect();
+
                 using (var response = ssh.RunCommand(command))
                 {
                     string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -601,7 +588,6 @@ public sealed class SftpService : IDisposable
         }
         catch
         {
-            // If SSH is not available or the command fails, keep the numeric GID.
         }
 
         return result;
