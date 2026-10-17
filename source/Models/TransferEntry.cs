@@ -2,7 +2,7 @@ using System.Threading;
 
 namespace StreamZilla.Models;
 
-public class DownloadEntry
+public class TransferEntry
 {
     private readonly object _chunkLock = new object();
     private long _completedLength;

@@ -6,7 +6,7 @@ using StreamZilla.Models;
 
 namespace StreamZilla.Services;
 
-public static class DownloadQueueService
+public static class TransferQueueService
 {
     private static readonly string QueueDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StreamZilla", "queues");
@@ -19,15 +19,15 @@ public static class DownloadQueueService
         return $"{host.Trim().ToLowerInvariant()}|{port}|{username.Trim().ToLowerInvariant()}";
     }
 
-    public static void Save(string connectionKey, IEnumerable<DownloadEntry> entries)
+    public static void Save(string connectionKey, IEnumerable<TransferEntry> entries)
     {
         try
         {
             Directory.CreateDirectory(QueueDirectory);
 
-            List<DownloadQueueEntry> pending = entries
+            List<TransferQueueEntry> pending = entries
                 .Where(x => !x.IsFinished)
-                .Select(x => new DownloadQueueEntry
+                .Select(x => new TransferQueueEntry
                 {
                     Id = x.Id,
                     FileName = x.FileName,
@@ -51,13 +51,13 @@ public static class DownloadQueueService
         }
         catch (Exception ex)
         {
-            LogService.Error($"Failed to save download queue: {ex}");
+            LogService.Error($"Failed to save transfer queue: {ex}");
         }
     }
 
-    public static List<DownloadEntry> Load(string connectionKey)
+    public static List<TransferEntry> Load(string connectionKey)
     {
-        List<DownloadEntry> result = new List<DownloadEntry>();
+        List<TransferEntry> result = new List<TransferEntry>();
 
         try
         {
@@ -71,7 +71,7 @@ public static class DownloadQueueService
             byte[] encrypted = File.ReadAllBytes(path);
             byte[] plain = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
 
-            List<DownloadQueueEntry>? entries = JsonSerializer.Deserialize<List<DownloadQueueEntry>>(
+            List<TransferQueueEntry>? entries = JsonSerializer.Deserialize<List<TransferQueueEntry>>(
                 Encoding.UTF8.GetString(plain), JsonOptions);
 
             if (entries == null)
@@ -79,9 +79,9 @@ public static class DownloadQueueService
                 return result;
             }
 
-            foreach (DownloadQueueEntry queueEntry in entries)
+            foreach (TransferQueueEntry queueEntry in entries)
             {
-                DownloadEntry entry = new DownloadEntry
+                TransferEntry entry = new TransferEntry
                 {
                     Id = queueEntry.Id,
                     FileName = queueEntry.FileName,
@@ -102,7 +102,7 @@ public static class DownloadQueueService
         }
         catch (Exception ex)
         {
-            LogService.Error($"Failed to load download queue: {ex}");
+            LogService.Error($"Failed to load transfer queue: {ex}");
         }
 
         return result;
@@ -121,11 +121,11 @@ public static class DownloadQueueService
         }
         catch (Exception ex)
         {
-            LogService.Error($"Failed to delete download queue: {ex}");
+            LogService.Error($"Failed to delete transfer queue: {ex}");
         }
     }
 
-    private static long CalculateCompletedLength(DownloadEntry entry)
+    private static long CalculateCompletedLength(TransferEntry entry)
     {
         if (entry.TotalLength <= 0 || entry.ChunkBytes.Length == 0)
         {

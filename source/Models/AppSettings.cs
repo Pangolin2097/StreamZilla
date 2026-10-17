@@ -8,7 +8,7 @@ public class AppSettings
     public string Password { get; set; } = "";
     public string LastLocalPath { get; set; } = "";
     public int ParallelConnections { get; set; } = 8;
-    public int MaxConcurrentDownloads { get; set; } = 4;
+    public int MaxConcurrentTransfers { get; set; } = 4;
 
     public List<string> ExpandedLocalPaths { get; set; } = new List<string>();
     public string LastLocalFolderPath { get; set; } = "";

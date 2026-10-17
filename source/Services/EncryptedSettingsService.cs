@@ -8,8 +8,7 @@ namespace StreamZilla.Services;
 
 public static class EncryptedSettingsService
 {
-    private static readonly string DirectoryPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StreamZilla");
+    private static readonly string DirectoryPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StreamZilla");
 
     private static readonly string FilePath = Path.Combine(DirectoryPath, "settings.bin");
 

@@ -4,18 +4,18 @@ using StreamZilla.Models;
 
 namespace StreamZilla.ViewModels;
 
-public sealed class DownloadItemViewModel : ViewModelBase
+public sealed class TransferItemViewModel : ViewModelBase
 {
-    private readonly DownloadEntry _entry;
+    private readonly TransferEntry _entry;
     private long _lastPollCompleted;
     private long _transferSpeed;
 
-    public DownloadItemViewModel(DownloadEntry entry)
+    public TransferItemViewModel(TransferEntry entry)
     {
         _entry = entry;
     }
 
-    public DownloadEntry Entry => _entry;
+    public TransferEntry Entry => _entry;
 
     public string Id => _entry.Id;
 

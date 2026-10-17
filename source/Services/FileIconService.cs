@@ -267,8 +267,8 @@ public static class FileIconService
     {
         DrawingGroup group = new DrawingGroup();
 
-        var pathGeometry = new PathGeometry();
-        var figure = new PathFigure
+        PathGeometry pathGeometry = new PathGeometry();
+        PathFigure figure = new PathFigure
         {
             IsClosed = true,
             StartPoint = new Point(4, 6),
@@ -282,13 +282,13 @@ public static class FileIconService
         };
         pathGeometry.Figures.Add(figure);
 
-        var fillBrush = new SolidColorBrush(Color.FromRgb(0x6B, 0x8E, 0x23));
-        var pen = new Pen(new SolidColorBrush(Color.FromRgb(0x4A, 0x6A, 0x14)), 1);
+        SolidColorBrush fillBrush = new SolidColorBrush(Color.FromRgb(0x6B, 0x8E, 0x23));
+        Pen pen = new Pen(new SolidColorBrush(Color.FromRgb(0x4A, 0x6A, 0x14)), 1);
 
         GeometryDrawing driveBody = new GeometryDrawing(fillBrush, pen, pathGeometry);
         group.Children.Add(driveBody);
 
-        var ledGeom = new EllipseGeometry(new Point(20, 10), 1.5, 1.5);
+        EllipseGeometry ledGeom = new EllipseGeometry(new Point(20, 10), 1.5, 1.5);
         GeometryDrawing led = new GeometryDrawing(
             new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0x00)), null, ledGeom);
         group.Children.Add(led);
@@ -302,8 +302,8 @@ public static class FileIconService
     {
         DrawingGroup group = new DrawingGroup();
 
-        var tabGeometry = new PathGeometry();
-        var tabFigure = new PathFigure
+        PathGeometry tabGeometry = new PathGeometry();
+        PathFigure tabFigure = new PathFigure
         {
             IsClosed = true,
             StartPoint = new Point(3, 5),
@@ -316,13 +316,13 @@ public static class FileIconService
         };
         tabGeometry.Figures.Add(tabFigure);
 
-        var tabBrush = new SolidColorBrush(Color.FromRgb(0xF7, 0xC9, 0x48));
-        var pen = new Pen(new SolidColorBrush(Color.FromRgb(0xD4, 0xA8, 0x35)), 0.5);
+        SolidColorBrush tabBrush = new SolidColorBrush(Color.FromRgb(0xF7, 0xC9, 0x48));
+        Pen pen = new Pen(new SolidColorBrush(Color.FromRgb(0xD4, 0xA8, 0x35)), 0.5);
 
         GeometryDrawing tab = new GeometryDrawing(tabBrush, pen, tabGeometry);
         group.Children.Add(tab);
 
-        var bodyGeom = new RectangleGeometry(new Rect(3, 7, 18, 10), 1, 1);
+        RectangleGeometry bodyGeom = new RectangleGeometry(new Rect(3, 7, 18, 10), 1, 1);
         GeometryDrawing body = new GeometryDrawing(tabBrush, pen, bodyGeom);
         group.Children.Add(body);
 
@@ -335,8 +335,8 @@ public static class FileIconService
     {
         DrawingGroup group = new DrawingGroup();
 
-        var pathGeometry = new PathGeometry();
-        var figure = new PathFigure
+        PathGeometry pathGeometry = new PathGeometry();
+        PathFigure figure = new PathFigure
         {
             IsClosed = true,
             StartPoint = new Point(5, 2),
@@ -351,14 +351,14 @@ public static class FileIconService
         };
         pathGeometry.Figures.Add(figure);
 
-        var fillBrush = new SolidColorBrush(Color.FromRgb(0xFA, 0xFA, 0xFA));
-        var pen = new Pen(new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)), 0.8);
+        SolidColorBrush fillBrush = new SolidColorBrush(Color.FromRgb(0xFA, 0xFA, 0xFA));
+        Pen pen = new Pen(new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)), 0.8);
 
         GeometryDrawing body = new GeometryDrawing(fillBrush, pen, pathGeometry);
         group.Children.Add(body);
 
-        var foldGeometry = new PathGeometry();
-        var foldFigure = new PathFigure
+        PathGeometry foldGeometry = new PathGeometry();
+        PathFigure foldFigure = new PathFigure
         {
             IsClosed = true,
             StartPoint = new Point(15, 2),
@@ -370,7 +370,7 @@ public static class FileIconService
         };
         foldGeometry.Figures.Add(foldFigure);
 
-        var foldBrush = new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD));
+        SolidColorBrush foldBrush = new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD));
         GeometryDrawing fold = new GeometryDrawing(foldBrush, pen, foldGeometry);
         group.Children.Add(fold);
 
@@ -378,7 +378,7 @@ public static class FileIconService
         {
             double y = 11 + i * 3;
             double width = 10 - i * 2;
-            var lineGeom = new RectangleGeometry(new Rect(8, y, width, 1.2));
+            RectangleGeometry lineGeom = new RectangleGeometry(new Rect(8, y, width, 1.2));
             GeometryDrawing line = new GeometryDrawing(
                 new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC)), null, lineGeom);
             group.Children.Add(line);

@@ -15,13 +15,13 @@ namespace StreamZilla.ViewModels;
 public class MainViewModel : ViewModelBase
 {
     private readonly SftpService _sftp = new();
-    private readonly ParallelSftpDownloadService _downloader = new();
+    private readonly IParallelTransferService _transferService = new ParallelSftpTransferService();
     private readonly IDialogService _dialogs;
     private readonly Dictionary<string, CancellationTokenSource> _cancellationTokens = new();
     private readonly DispatcherTimer _pollTimer = new();
     private readonly DispatcherTimer _remoteRefreshTimer = new();
     private readonly Dictionary<string, FileSystemWatcher> _localWatchers = new();
-    private readonly List<DownloadItemViewModel> _pendingTransfers = new();
+    private readonly List<TransferItemViewModel> _pendingTransfers = new();
     private readonly HashSet<string> _activeTransferIds = new();
     private readonly SemaphoreSlim _queueSaveGate = new(1, 1);
 
@@ -38,41 +38,41 @@ public class MainViewModel : ViewModelBase
         _settings = EncryptedSettingsService.Load();
 
         _maxStreamsDisplay = Math.Clamp(_settings.ParallelConnections, 1, 8).ToString();
-        _maxFilesDisplay = Math.Clamp(_settings.MaxConcurrentDownloads, 1, 8).ToString();
+        _maxFilesDisplay = Math.Clamp(_settings.MaxConcurrentTransfers, 1, 8).ToString();
 
         ConnectCommand = new RelayCommand(async _ => await ConnectAsync(), _ => !IsBusy);
         DisconnectCommand = new RelayCommand(_ => Disconnect());
         RefreshRemoteCommand = new RelayCommand(async _ => await RefreshRemoteAsync(), _ => _sftp.IsConnected);
-        PauseAllCommand = new RelayCommand(_ => PauseAll(), _ => Downloads.Any(x => x.CanPause));
-        ResumeAllCommand = new RelayCommand(_ => ResumeAll(), _ => Downloads.Any(x => x.CanResume));
-        ClearQueueCommand = new RelayCommand(_ => ClearQueue(), _ => Downloads.Count > 0);
+        PauseAllCommand = new RelayCommand(_ => PauseAll(), _ => Transfers.Any(x => x.CanPause));
+        ResumeAllCommand = new RelayCommand(_ => ResumeAll(), _ => Transfers.Any(x => x.CanResume));
+        ClearQueueCommand = new RelayCommand(_ => ClearQueue(), _ => Transfers.Count > 0);
         RemoveSelectedCommand = new RelayCommand(
             parameter => RemoveSelected(parameter as IList),
             parameter => parameter is IList list && list.Count > 0);
 
         PauseTransferCommand = new RelayCommand(
-            parameter => { if (parameter is DownloadItemViewModel item) PauseTransfer(item); },
-            parameter => parameter is DownloadItemViewModel item && item.CanPause);
+            parameter => { if (parameter is TransferItemViewModel item) { PauseTransfer(item); } },
+            parameter => parameter is TransferItemViewModel item && item.CanPause);
 
         ResumeTransferCommand = new RelayCommand(
-            parameter => { if (parameter is DownloadItemViewModel item) ResumeTransfer(item); },
-            parameter => parameter is DownloadItemViewModel item && item.CanResume);
+            parameter => { if (parameter is TransferItemViewModel item) { ResumeTransfer(item); } },
+            parameter => parameter is TransferItemViewModel item && item.CanResume);
 
         RemoveTransferCommand = new RelayCommand(
-            parameter => { if (parameter is DownloadItemViewModel item) RemoveTransfer(item); });
+            parameter => { if (parameter is TransferItemViewModel item) { RemoveTransfer(item); } });
 
         NewFolderCommand = new RelayCommand(
-            parameter => { if (parameter is EntryItemViewModel item) NewLocalFolder(item); });
+            parameter => { if (parameter is EntryItemViewModel item) { NewLocalFolder(item); } });
 
         DeleteLocalItemsCommand = new RelayCommand(
             parameter => DeleteEntries(parameter as IList, isRemote: false));
 
         UploadCommand = new RelayCommand(
-            parameter => { if (parameter is EntryItemViewModel item) UploadToRemote(item); },
+            parameter => { if (parameter is EntryItemViewModel item) { UploadToRemote(item); } },
             _ => _sftp.IsConnected);
 
         NewRemoteFolderCommand = new RelayCommand(
-            parameter => { if (parameter is EntryItemViewModel item) NewRemoteFolder(item); },
+            parameter => { if (parameter is EntryItemViewModel item) { NewRemoteFolder(item); } },
             _ => _sftp.IsConnected);
 
         DeleteRemoteItemsCommand = new RelayCommand(
@@ -110,7 +110,7 @@ public class MainViewModel : ViewModelBase
     public RelayCommand NewRemoteFolderCommand { get; }
     public RelayCommand DeleteRemoteItemsCommand { get; }
 
-    public ObservableCollection<DownloadItemViewModel> Downloads { get; } = new();
+    public ObservableCollection<TransferItemViewModel> Transfers { get; } = new();
     public ObservableCollection<EntryItemViewModel> LocalRoots { get; } = new();
     public ObservableCollection<EntryItemViewModel> RemoteRoots { get; } = new();
 
@@ -170,7 +170,7 @@ public class MainViewModel : ViewModelBase
             if (int.TryParse(value, out int max) && max is >= 1 and <= 8)
             {
                 _maxFilesDisplay = value;
-                _settings.MaxConcurrentDownloads = max;
+                _settings.MaxConcurrentTransfers = max;
                 OnPropertyChanged();
             }
         }
@@ -183,17 +183,17 @@ public class MainViewModel : ViewModelBase
     }
 
     public string QueueCountDisplay =>
-        $"{Downloads.Count(x => x.IsComplete)}/{Downloads.Count}";
+        $"{Transfers.Count(x => x.IsComplete)}/{Transfers.Count}";
 
     public string TotalSizeDisplay =>
-        $"{FileIconHelper.FormatSize(Downloads.Sum(x => x.CompletedLength))} / " +
-        $"{FileIconHelper.FormatSize(Downloads.Sum(x => x.TotalLength))}";
+        $"{FileIconHelper.FormatSize(Transfers.Sum(x => x.CompletedLength))} / " +
+        $"{FileIconHelper.FormatSize(Transfers.Sum(x => x.TotalLength))}";
 
     public string TotalSpeedDisplay
     {
         get
         {
-            long speed = Downloads.Sum(x => x.TransferSpeed);
+            long speed = Transfers.Sum(x => x.TransferSpeed);
 
             return speed <= 0
                 ? ""
@@ -222,7 +222,7 @@ public class MainViewModel : ViewModelBase
                 return;
             }
 
-            _currentConnectionKey = DownloadQueueService.GetConnectionKey(
+            _currentConnectionKey = TransferQueueService.GetConnectionKey(
                 _settings.Host,
                 _settings.Port,
                 _settings.Username);
@@ -286,7 +286,7 @@ public class MainViewModel : ViewModelBase
     {
         try
         {
-            foreach (DownloadItemViewModel item in Downloads.ToList())
+            foreach (TransferItemViewModel item in Transfers.ToList())
             {
                 if (item.Status is "Active" or "Queued")
                 {
@@ -303,7 +303,7 @@ public class MainViewModel : ViewModelBase
             // Persist all unfinished transfers before clearing the visible queue.
             SaveQueue();
 
-            Downloads.Clear();
+            Transfers.Clear();
             _pendingTransfers.Clear();
 
             foreach (CancellationTokenSource cts in _cancellationTokens.Values)
@@ -422,7 +422,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        await Application.Current?.Dispatcher.BeginInvoke(
+        await Application.Current.Dispatcher.BeginInvoke(
             () => ScrollToEntryRequested?.Invoke(target),
             DispatcherPriority.Loaded);
     }
@@ -914,7 +914,7 @@ public class MainViewModel : ViewModelBase
         {
             if (item.IsDirectory)
             {
-                DownloadItemViewModel placeholder = AddScanningPlaceholder(item, folder);
+                TransferItemViewModel placeholder = AddScanningPlaceholder(item, folder);
                 _ = ScanRemoteDirectoryAsync(item, folder, placeholder);
             }
             else
@@ -926,11 +926,11 @@ public class MainViewModel : ViewModelBase
         OnTransferCollectionChanged();
     }
 
-    private DownloadItemViewModel AddScanningPlaceholder(
+    private TransferItemViewModel AddScanningPlaceholder(
         EntryItemViewModel directory,
         EntryItemViewModel target)
     {
-        DownloadEntry entry = new()
+        TransferEntry entry = new()
         {
             FileName = directory.Name,
             RemotePath = directory.FullPath,
@@ -938,8 +938,8 @@ public class MainViewModel : ViewModelBase
             Status = "Scanning"
         };
 
-        DownloadItemViewModel placeholder = new(entry);
-        Downloads.Add(placeholder);
+        TransferItemViewModel placeholder = new(entry);
+        Transfers.Add(placeholder);
 
         return placeholder;
     }
@@ -947,16 +947,16 @@ public class MainViewModel : ViewModelBase
     private async Task ScanRemoteDirectoryAsync(
         EntryItemViewModel directory,
         EntryItemViewModel target,
-        DownloadItemViewModel placeholder)
+        TransferItemViewModel placeholder)
     {
         try
         {
             List<RemoteEntry> files = await Task.Run(
                 () => _sftp.ListFilesRecursive(directory.FullPath));
 
-            await Application.Current?.Dispatcher.InvokeAsync(() =>
+            await Application.Current.Dispatcher.InvokeAsync(() =>
             {
-                Downloads.Remove(placeholder);
+                Transfers.Remove(placeholder);
 
                 string prefix = directory.FullPath.TrimEnd('/');
 
@@ -976,7 +976,7 @@ public class MainViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            await Application.Current?.Dispatcher.InvokeAsync(() =>
+            await Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 placeholder.Status = "Error";
                 placeholder.ErrorMessage = ex.Message;
@@ -1054,14 +1054,14 @@ public class MainViewModel : ViewModelBase
 
     private void StartDownload(Entry remoteEntry, string localPath)
     {
-        if (Downloads.Any(x =>
+        if (Transfers.Any(x =>
                 x.RemotePath.Equals(remoteEntry.FullPath, StringComparison.OrdinalIgnoreCase) &&
                 x.LocalPath.Equals(localPath, StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }
 
-        DownloadEntry entry = new()
+        TransferEntry entry = new()
         {
             FileName = Path.GetFileName(localPath),
             RemotePath = remoteEntry.FullPath,
@@ -1070,12 +1070,12 @@ public class MainViewModel : ViewModelBase
             Direction = TransferDirection.Download
         };
 
-        QueueTransfer(new DownloadItemViewModel(entry));
+        QueueTransfer(new TransferItemViewModel(entry));
     }
 
     private void StartUpload(Entry localEntry, string remotePath)
     {
-        DownloadEntry entry = new()
+        TransferEntry entry = new()
         {
             FileName = localEntry.Name,
             RemotePath = remotePath,
@@ -1084,12 +1084,12 @@ public class MainViewModel : ViewModelBase
             Direction = TransferDirection.Upload
         };
 
-        QueueTransfer(new DownloadItemViewModel(entry));
+        QueueTransfer(new TransferItemViewModel(entry));
     }
 
-    private void QueueTransfer(DownloadItemViewModel item)
+    private void QueueTransfer(TransferItemViewModel item)
     {
-        Downloads.Add(item);
+        Transfers.Add(item);
         item.Status = "Queued";
 
         if (!_pendingTransfers.Contains(item))
@@ -1103,14 +1103,14 @@ public class MainViewModel : ViewModelBase
 
     private void StartNextQueuedTransfer()
     {
-        int max = Math.Clamp(_settings.MaxConcurrentDownloads, 1, 8);
+        int max = Math.Clamp(_settings.MaxConcurrentTransfers, 1, 8);
 
         while (_activeTransferIds.Count < max && _pendingTransfers.Count > 0)
         {
-            DownloadItemViewModel next = _pendingTransfers[0];
+            TransferItemViewModel next = _pendingTransfers[0];
             _pendingTransfers.RemoveAt(0);
 
-            if (next.IsFinished || !Downloads.Contains(next))
+            if (next.IsFinished || !Transfers.Contains(next))
             {
                 continue;
             }
@@ -1125,7 +1125,7 @@ public class MainViewModel : ViewModelBase
     }
 
     private async Task RunTransferAsync(
-        DownloadItemViewModel item,
+        TransferItemViewModel item,
         CancellationToken token)
     {
         try
@@ -1165,7 +1165,7 @@ public class MainViewModel : ViewModelBase
     }
 
     private async Task RunDownloadAsync(
-        DownloadItemViewModel item,
+        TransferItemViewModel item,
         CancellationToken token)
     {
         RemoteEntry remoteFile = new()
@@ -1175,7 +1175,7 @@ public class MainViewModel : ViewModelBase
             Size = item.TotalLength
         };
 
-        await _downloader.DownloadAsync(
+        await _transferService.DownloadAsync(
             _settings,
             remoteFile,
             item.LocalPath,
@@ -1185,7 +1185,7 @@ public class MainViewModel : ViewModelBase
     }
 
     private async Task RunUploadAsync(
-        DownloadItemViewModel item,
+        TransferItemViewModel item,
         CancellationToken token)
     {
         long lastReported = 0;
@@ -1204,7 +1204,7 @@ public class MainViewModel : ViewModelBase
     }
 
     private void UpdateTransferProgress(
-        DownloadItemViewModel item,
+        TransferItemViewModel item,
         long progress,
         ref long lastReported,
         ref DateTime lastUpdate)
@@ -1234,12 +1234,12 @@ public class MainViewModel : ViewModelBase
 
     private void LoadPersistedTransfers()
     {
-        List<DownloadEntry> persisted = DownloadQueueService.Load(_currentConnectionKey);
+        List<TransferEntry> persisted = TransferQueueService.Load(_currentConnectionKey);
         int restored = 0;
 
-        foreach (DownloadEntry entry in persisted)
+        foreach (TransferEntry entry in persisted)
         {
-            bool exists = Downloads.Any(x =>
+            bool exists = Transfers.Any(x =>
                 x.RemotePath.Equals(entry.RemotePath, StringComparison.OrdinalIgnoreCase) &&
                 x.LocalPath.Equals(entry.LocalPath, StringComparison.OrdinalIgnoreCase));
 
@@ -1253,7 +1253,7 @@ public class MainViewModel : ViewModelBase
                 entry.Status = "Paused";
             }
 
-            Downloads.Add(new DownloadItemViewModel(entry));
+            Transfers.Add(new TransferItemViewModel(entry));
             restored++;
         }
 
@@ -1270,7 +1270,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        List<DownloadEntry> snapshot = Downloads.Select(x => x.Entry).ToList();
+        List<TransferEntry> snapshot = Transfers.Select(x => x.Entry).ToList();
         string connectionKey = _currentConnectionKey;
 
         Task.Run(async () =>
@@ -1279,7 +1279,7 @@ public class MainViewModel : ViewModelBase
 
             try
             {
-                DownloadQueueService.Save(connectionKey, snapshot);
+                TransferQueueService.Save(connectionKey, snapshot);
             }
             finally
             {
@@ -1290,7 +1290,7 @@ public class MainViewModel : ViewModelBase
 
     private void PollTransfers(object? sender, EventArgs e)
     {
-        foreach (DownloadItemViewModel item in Downloads.ToList())
+        foreach (TransferItemViewModel item in Transfers.ToList())
         {
             long completed = item.CompletedLength;
             long delta = completed - item.LastPollCompleted;
@@ -1306,7 +1306,7 @@ public class MainViewModel : ViewModelBase
         SaveQueue();
     }
 
-    public void PauseTransfer(DownloadItemViewModel item)
+    public void PauseTransfer(TransferItemViewModel item)
     {
         if (item.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
         {
@@ -1324,7 +1324,7 @@ public class MainViewModel : ViewModelBase
         SaveQueue();
     }
 
-    public void ResumeTransfer(DownloadItemViewModel item)
+    public void ResumeTransfer(TransferItemViewModel item)
     {
         if (item.IsFinished)
         {
@@ -1350,7 +1350,7 @@ public class MainViewModel : ViewModelBase
         StartNextQueuedTransfer();
     }
 
-    public void RemoveTransfer(DownloadItemViewModel item)
+    public void RemoveTransfer(TransferItemViewModel item)
     {
         _pendingTransfers.Remove(item);
 
@@ -1360,7 +1360,7 @@ public class MainViewModel : ViewModelBase
             _cancellationTokens.Remove(item.Entry.Id);
         }
 
-        string sidecarPath = ParallelSftpDownloadService.GetSidecarPath(item.LocalPath);
+        string sidecarPath = ParallelSftpTransferService.GetSidecarPath(item.LocalPath);
 
         Task.Delay(300).ContinueWith(_ =>
         {
@@ -1377,7 +1377,7 @@ public class MainViewModel : ViewModelBase
             }
         });
 
-        Downloads.Remove(item);
+        Transfers.Remove(item);
         _activeTransferIds.Remove(item.Entry.Id);
 
         OnTransferCollectionChanged();
@@ -1387,9 +1387,9 @@ public class MainViewModel : ViewModelBase
 
     public void ClearQueue()
     {
-        List<DownloadItemViewModel> items = Downloads.ToList();
+        List<TransferItemViewModel> items = Transfers.ToList();
 
-        foreach (DownloadItemViewModel item in items)
+        foreach (TransferItemViewModel item in items)
         {
             _pendingTransfers.Remove(item);
 
@@ -1402,11 +1402,11 @@ public class MainViewModel : ViewModelBase
             item.Status = "Paused";
         }
 
-        Downloads.Clear();
+        Transfers.Clear();
 
-        foreach (DownloadItemViewModel item in items)
+        foreach (TransferItemViewModel item in items)
         {
-            string sidecarPath = ParallelSftpDownloadService.GetSidecarPath(item.LocalPath);
+            string sidecarPath = ParallelSftpTransferService.GetSidecarPath(item.LocalPath);
 
             Task.Delay(500).ContinueWith(_ =>
             {
@@ -1435,8 +1435,8 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        foreach (DownloadItemViewModel item in selectedItems
-            .OfType<DownloadItemViewModel>()
+        foreach (TransferItemViewModel item in selectedItems
+            .OfType<TransferItemViewModel>()
             .ToList())
         {
             RemoveTransfer(item);
@@ -1445,7 +1445,7 @@ public class MainViewModel : ViewModelBase
 
     private void PauseAll()
     {
-        foreach (DownloadItemViewModel item in Downloads.Where(x => x.CanPause).ToList())
+        foreach (TransferItemViewModel item in Transfers.Where(x => x.CanPause).ToList())
         {
             PauseTransfer(item);
         }
@@ -1453,7 +1453,7 @@ public class MainViewModel : ViewModelBase
 
     private void ResumeAll()
     {
-        foreach (DownloadItemViewModel item in Downloads.Where(x => x.CanResume).ToList())
+        foreach (TransferItemViewModel item in Transfers.Where(x => x.CanResume).ToList())
         {
             ResumeTransfer(item);
         }
