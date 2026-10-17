@@ -20,22 +20,19 @@ public sealed class SftpService : IDisposable
     private readonly SemaphoreSlim _listGate = new(1, 1);
     private byte[]? _lastHostKey;
     private readonly Dictionary<int, string> _uidCache = new();
-    private readonly object _uidCacheLock = new();
     private readonly Dictionary<int, string> _gidCache = new();
+    private readonly object _uidCacheLock = new();
     private readonly object _gidCacheLock = new();
     private AppSettings? _settings;
 
-    public bool IsConnected
-    {
-        get { return _client != null && _client.IsConnected; }
-    }
+    public bool IsConnected => _client != null && _client.IsConnected;
 
     public void Connect(AppSettings settings)
     {
         Disconnect();
 
-        AuthenticationMethod auth = new PasswordAuthenticationMethod(settings.Username, settings.Password);
-        ConnectionInfo info = new ConnectionInfo(settings.Host, settings.Port, settings.Username, auth)
+        PasswordAuthenticationMethod auth = new(settings.Username, settings.Password);
+        ConnectionInfo info = new(settings.Host, settings.Port, settings.Username, auth)
         {
             Timeout = TimeSpan.FromSeconds(15)
         };
@@ -54,14 +51,12 @@ public sealed class SftpService : IDisposable
 
         _listClient = CreateListClient(settings);
         _listClient.Connect();
-
-        LogService.Info($"Connected to SFTP {settings.Host}:{settings.Port} as {settings.Username}.");
     }
 
     private static SftpClient CreateListClient(AppSettings settings)
     {
-        AuthenticationMethod auth = new PasswordAuthenticationMethod(settings.Username, settings.Password);
-        ConnectionInfo info = new ConnectionInfo(settings.Host, settings.Port, settings.Username, auth)
+        PasswordAuthenticationMethod auth = new(settings.Username, settings.Password);
+        ConnectionInfo info = new(settings.Host, settings.Port, settings.Username, auth)
         {
             Timeout = TimeSpan.FromSeconds(15)
         };
@@ -77,7 +72,7 @@ public sealed class SftpService : IDisposable
     {
         if (_settings == null)
         {
-            throw new InvalidOperationException("Not connected to SFTP server.");
+            throw new InvalidOperationException("Not connected.");
         }
 
         if (_listClient != null && _listClient.IsConnected)
@@ -98,8 +93,7 @@ public sealed class SftpService : IDisposable
         }
 
         using SHA256 sha = SHA256.Create();
-        byte[] hash = sha.ComputeHash(_lastHostKey);
-        return Convert.ToBase64String(hash);
+        return Convert.ToBase64String(sha.ComputeHash(_lastHostKey));
     }
 
     public List<RemoteEntry> ListDirectory(string path)
@@ -109,35 +103,35 @@ public sealed class SftpService : IDisposable
 
         try
         {
-            List<RemoteEntry> items = new List<RemoteEntry>();
-            HashSet<int> uidsToResolve = new();
-            HashSet<int> gidsToResolve = new();
+            List<RemoteEntry> items = new();
+            HashSet<int> uids = new();
+            HashSet<int> gids = new();
 
             foreach (SftpFile file in _listClient!.ListDirectory(path))
             {
-                if (file.Name == "." || file.Name == "..")
+                if (file.Name is "." or "..")
                 {
                     continue;
                 }
 
-                uidsToResolve.Add(file.UserId);
-                gidsToResolve.Add(file.GroupId);
+                uids.Add(file.UserId);
+                gids.Add(file.GroupId);
                 items.Add(CreateRemoteEntry(file));
             }
 
-            Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
-            Dictionary<int, string> resolvedGids = ResolveGids(gidsToResolve);
+            Dictionary<int, string> owners = ResolveUids(uids);
+            Dictionary<int, string> groups = ResolveGids(gids);
 
-            foreach (RemoteEntry entry in items)
+            foreach (RemoteEntry item in items)
             {
-                if (resolvedUids.TryGetValue(int.Parse(entry.Owner), out string? name))
+                if (owners.TryGetValue(int.Parse(item.Owner), out string? owner))
                 {
-                    entry.Owner = name;
+                    item.Owner = owner;
                 }
 
-                if (resolvedGids.TryGetValue(int.Parse(entry.Group), out string? group))
+                if (groups.TryGetValue(int.Parse(item.Group), out string? group))
                 {
-                    entry.Group = group;
+                    item.Group = group;
                 }
             }
 
@@ -152,12 +146,8 @@ public sealed class SftpService : IDisposable
         }
     }
 
-    public List<RemoteEntry> ListDirectoryIsolated(AppSettings settings, string path)
-    {
-        // Retained for compatibility. Directory listings use the persistent dedicated
-        // listing connection rather than opening a new SFTP connection for every call.
-        return ListDirectory(path);
-    }
+    public List<RemoteEntry> ListDirectoryIsolated(AppSettings settings, string path) =>
+        ListDirectory(path);
 
     public List<RemoteEntry> ListFilesRecursive(string directory)
     {
@@ -166,7 +156,7 @@ public sealed class SftpService : IDisposable
 
         try
         {
-            List<RemoteEntry> result = new List<RemoteEntry>();
+            List<RemoteEntry> result = new();
             Walk(directory, result);
             return result;
         }
@@ -176,21 +166,18 @@ public sealed class SftpService : IDisposable
         }
     }
 
-    public List<RemoteEntry> ListFilesRecursiveIsolated(AppSettings settings, string directory)
-    {
-        // Retained for compatibility. Uses the persistent dedicated listing connection.
-        return ListFilesRecursive(directory);
-    }
+    public List<RemoteEntry> ListFilesRecursiveIsolated(AppSettings settings, string directory) =>
+        ListFilesRecursive(directory);
 
     private void Walk(string directory, List<RemoteEntry> output)
     {
-        HashSet<int> uidsToResolve = new();
-        HashSet<int> gidsToResolve = new();
-        List<RemoteEntry> batch = new List<RemoteEntry>();
+        HashSet<int> uids = new();
+        HashSet<int> gids = new();
+        List<RemoteEntry> batch = new();
 
         foreach (SftpFile file in _listClient!.ListDirectory(directory))
         {
-            if (file.Name == "." || file.Name == "..")
+            if (file.Name is "." or "..")
             {
                 continue;
             }
@@ -198,31 +185,30 @@ public sealed class SftpService : IDisposable
             if (file.IsDirectory)
             {
                 Walk(file.FullName, output);
+                continue;
             }
-            else
-            {
-                uidsToResolve.Add(file.UserId);
-                gidsToResolve.Add(file.GroupId);
-                batch.Add(CreateRemoteEntry(file));
-            }
+
+            uids.Add(file.UserId);
+            gids.Add(file.GroupId);
+            batch.Add(CreateRemoteEntry(file));
         }
 
-        Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
-        Dictionary<int, string> resolvedGids = ResolveGids(gidsToResolve);
+        Dictionary<int, string> owners = ResolveUids(uids);
+        Dictionary<int, string> groups = ResolveGids(gids);
 
-        foreach (RemoteEntry entry in batch)
+        foreach (RemoteEntry item in batch)
         {
-            if (resolvedUids.TryGetValue(int.Parse(entry.Owner), out string? name))
+            if (owners.TryGetValue(int.Parse(item.Owner), out string? owner))
             {
-                entry.Owner = name;
+                item.Owner = owner;
             }
 
-            if (resolvedGids.TryGetValue(int.Parse(entry.Group), out string? group))
+            if (groups.TryGetValue(int.Parse(item.Group), out string? group))
             {
-                entry.Group = group;
+                item.Group = group;
             }
 
-            output.Add(entry);
+            output.Add(item);
         }
     }
 
@@ -237,7 +223,7 @@ public sealed class SftpService : IDisposable
             Owner = file.UserId.ToString(),
             Group = file.GroupId.ToString(),
             Permissions = FormatPermissions(file.Attributes),
-            LastModified = file.LastWriteTime,
+            Modified = file.LastWriteTime,
             Created = file.LastAccessTime
         };
     }
@@ -262,7 +248,7 @@ public sealed class SftpService : IDisposable
             string remoteDirectory = Path.GetDirectoryName(remotePath) ?? "/";
             string sidecarPath = remotePath + SidecarSuffix;
 
-            if (remoteDirectory.Length > 0 && !remoteDirectory.Equals("/", StringComparison.Ordinal))
+            if (remoteDirectory.Length > 0 && remoteDirectory != "/")
             {
                 try
                 {
@@ -292,47 +278,50 @@ public sealed class SftpService : IDisposable
             WriteUploadSidecar(sidecarPath, totalLength, resumeOffset);
             progress?.Invoke(resumeOffset);
 
-            using (FileStream source = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using FileStream source = new(
+                localPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
+
+            if (resumeOffset > 0 && resumeOffset < totalLength)
             {
-                if (resumeOffset > 0 && resumeOffset < totalLength)
+                source.Seek(resumeOffset, SeekOrigin.Begin);
+            }
+
+            SftpFileStream destination = _client!.OpenWrite(remotePath);
+
+            if (resumeOffset > 0)
+            {
+                destination.Seek(resumeOffset, SeekOrigin.Begin);
+            }
+
+            using (destination)
+            {
+                byte[] buffer = new byte[1024 * 1024];
+                long written = resumeOffset;
+                long lastSidecarUpdate = 0;
+
+                while (true)
                 {
-                    source.Seek(resumeOffset, SeekOrigin.Begin);
-                }
+                    token.ThrowIfCancellationRequested();
 
-                SftpFileStream destination = _client!.OpenWrite(remotePath);
+                    int read = source.Read(buffer, 0, buffer.Length);
 
-                if (resumeOffset > 0)
-                {
-                    destination.Seek(resumeOffset, SeekOrigin.Begin);
-                }
-
-                using (destination)
-                {
-                    byte[] buffer = new byte[1024 * 1024];
-                    long written = resumeOffset;
-                    long lastSidecarUpdate = 0;
-
-                    while (true)
+                    if (read <= 0)
                     {
-                        token.ThrowIfCancellationRequested();
+                        break;
+                    }
 
-                        int read = source.Read(buffer, 0, buffer.Length);
+                    destination.Write(buffer, 0, read);
+                    destination.Flush();
+                    written += read;
+                    progress?.Invoke(written);
 
-                        if (read <= 0)
-                        {
-                            break;
-                        }
-
-                        destination.Write(buffer, 0, read);
-                        destination.Flush();
-                        written += read;
-                        progress?.Invoke(written);
-
-                        if (written - lastSidecarUpdate >= 1024 * 1024 || written >= totalLength)
-                        {
-                            lastSidecarUpdate = written;
-                            WriteUploadSidecar(sidecarPath, totalLength, written);
-                        }
+                    if (written - lastSidecarUpdate >= 1024 * 1024 || written >= totalLength)
+                    {
+                        lastSidecarUpdate = written;
+                        WriteUploadSidecar(sidecarPath, totalLength, written);
                     }
                 }
             }
@@ -369,7 +358,7 @@ public sealed class SftpService : IDisposable
     {
         try
         {
-            TransferSidecar sidecar = new TransferSidecar
+            TransferSidecar sidecar = new()
             {
                 Direction = "Upload",
                 TotalLength = totalLength,
@@ -488,8 +477,7 @@ public sealed class SftpService : IDisposable
 
         try
         {
-            SftpFileAttributes attributes = _client!.GetAttributes(remotePath);
-            return attributes.IsDirectory;
+            return _client!.GetAttributes(remotePath).IsDirectory;
         }
         catch (SftpPathNotFoundException)
         {
@@ -507,7 +495,7 @@ public sealed class SftpService : IDisposable
 
         foreach (SftpFile child in _client!.ListDirectory(remotePath))
         {
-            if (child.Name == "." || child.Name == "..")
+            if (child.Name is "." or "..")
             {
                 continue;
             }
@@ -542,98 +530,56 @@ public sealed class SftpService : IDisposable
         return result;
     }
 
-    private Dictionary<int, string> ResolveUids(ICollection<int> uids)
+    private Dictionary<int, string> ResolveUids(ICollection<int> ids)
     {
-        Dictionary<int, string> result = new();
-
-        lock (_uidCacheLock)
-        {
-            foreach (int uid in uids)
-            {
-                if (_uidCache.TryGetValue(uid, out string? cached))
-                {
-                    result[uid] = cached;
-                }
-            }
-        }
-
-        List<int> missing = uids.Where(uid => !result.ContainsKey(uid)).ToList();
-
-        if (missing.Count == 0 || _settings == null)
-        {
-            return result;
-        }
-
-        string command = string.Join(";", missing.Select(uid => $"id -un {uid}"));
-
-        try
-        {
-            AuthenticationMethod auth = new PasswordAuthenticationMethod(_settings.Username, _settings.Password);
-            ConnectionInfo info = new ConnectionInfo(_settings.Host, _settings.Port, _settings.Username, auth)
-            {
-                Timeout = TimeSpan.FromSeconds(10)
-            };
-
-            using SshClient ssh = new SshClient(info);
-            ssh.Connect();
-
-            using var response = ssh.RunCommand(command);
-            string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
-
-            for (int i = 0; i < missing.Count && i < lines.Length; i++)
-            {
-                string name = lines[i].Trim();
-                result[missing[i]] = name;
-
-                lock (_uidCacheLock)
-                {
-                    _uidCache[missing[i]] = name;
-                }
-            }
-        }
-        catch
-        {
-        }
-
-        return result;
+        return ResolveIds(ids, _uidCache, _uidCacheLock, "id -un");
     }
 
-    private Dictionary<int, string> ResolveGids(ICollection<int> gids)
+    private Dictionary<int, string> ResolveGids(ICollection<int> ids)
+    {
+        return ResolveIds(ids, _gidCache, _gidCacheLock, "id -gn");
+    }
+
+    private Dictionary<int, string> ResolveIds(
+        ICollection<int> ids,
+        Dictionary<int, string> cache,
+        object cacheLock,
+        string command)
     {
         Dictionary<int, string> result = new();
 
-        lock (_gidCacheLock)
+        lock (cacheLock)
         {
-            foreach (int gid in gids)
+            foreach (int id in ids)
             {
-                if (_gidCache.TryGetValue(gid, out string? cached))
+                if (cache.TryGetValue(id, out string? name))
                 {
-                    result[gid] = cached;
+                    result[id] = name;
                 }
             }
         }
 
-        List<int> missing = gids.Where(gid => !result.ContainsKey(gid)).ToList();
+        List<int> missing = ids.Where(x => !result.ContainsKey(x)).ToList();
 
         if (missing.Count == 0 || _settings == null)
         {
             return result;
         }
 
-        string command = string.Join(";", missing.Select(gid => $"id -gn {gid}"));
+        string script = string.Join(";", missing.Select(x => $"{command} {x}"));
 
         try
         {
-            AuthenticationMethod auth = new PasswordAuthenticationMethod(_settings.Username, _settings.Password);
-            ConnectionInfo info = new ConnectionInfo(_settings.Host, _settings.Port, _settings.Username, auth)
+            PasswordAuthenticationMethod auth = new(_settings.Username, _settings.Password);
+            ConnectionInfo info = new(_settings.Host, _settings.Port, _settings.Username, auth)
             {
                 Timeout = TimeSpan.FromSeconds(10)
             };
 
-            using SshClient ssh = new SshClient(info);
+            using SshClient ssh = new(info);
             ssh.Connect();
 
-            using var response = ssh.RunCommand(command);
+            using Renci.SshNet.SshCommand response = ssh.RunCommand(script);
             string[] lines = response.Result.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
             for (int i = 0; i < missing.Count && i < lines.Length; i++)
@@ -641,9 +587,9 @@ public sealed class SftpService : IDisposable
                 string name = lines[i].Trim();
                 result[missing[i]] = name;
 
-                lock (_gidCacheLock)
+                lock (cacheLock)
                 {
-                    _gidCache[missing[i]] = name;
+                    cache[missing[i]] = name;
                 }
             }
         }
@@ -669,13 +615,6 @@ public sealed class SftpService : IDisposable
             try
             {
                 _listClient.Disconnect();
-            }
-            catch
-            {
-            }
-
-            try
-            {
                 _listClient.Dispose();
             }
             catch
@@ -690,13 +629,6 @@ public sealed class SftpService : IDisposable
             try
             {
                 _client.Disconnect();
-            }
-            catch
-            {
-            }
-
-            try
-            {
                 _client.Dispose();
             }
             catch
@@ -710,15 +642,12 @@ public sealed class SftpService : IDisposable
         LogService.Info("Disconnected from SFTP.");
     }
 
-    public void Dispose()
-    {
-        Disconnect();
-    }
+    public void Dispose() => Disconnect();
 
     private sealed class TransferSidecar
     {
-        public string TransferId { get; set; } = string.Empty;
-        public string Direction { get; set; } = string.Empty;
+        public string TransferId { get; set; } = "";
+        public string Direction { get; set; } = "";
         public long TotalLength { get; set; }
         public long CompletedLength { get; set; }
         public DateTime UpdatedAtUtc { get; set; }

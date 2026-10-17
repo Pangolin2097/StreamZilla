@@ -19,7 +19,7 @@ public sealed class ParallelSftpDownloadService
 
     public async Task DownloadAsync(
         AppSettings settings,
-        RemoteEntry remoteFile,
+        Entry remoteFile,
         string localPath,
         int connections,
         DownloadEntry entry,
@@ -40,17 +40,19 @@ public sealed class ParallelSftpDownloadService
         string sidecarPath = localPath + SidecarSuffix;
         bool isNewDownload = !File.Exists(sidecarPath);
 
-        int expectedChunkCount = Math.Max(1, Math.Min(connections, (int)Math.Max(1, totalSize / (1024 * 1024))));
+        int expectedChunkCount = Math.Max(
+            1,
+            Math.Min(connections, (int)Math.Max(1, totalSize / (1024 * 1024))));
 
         if (isNewDownload)
         {
             entry.ResetChunkBytes(expectedChunkCount);
 
-            using (FileStream createStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.Read))
-            {
-                // Intentionally do not preallocate the destination file. Its size grows
-                // as data is written, providing a visible indication that it is incomplete.
-            }
+            using FileStream createStream = new(
+                localPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.Read);
 
             WriteDownloadSidecar(sidecarPath, entry, totalSize);
             LogService.Info($"Starting download to {localPath} ({totalSize} bytes, {expectedChunkCount} stream(s)).");
@@ -60,7 +62,7 @@ public sealed class ParallelSftpDownloadService
             if (entry.ChunkBytes.Length != expectedChunkCount)
             {
                 entry.ResetChunkBytes(expectedChunkCount);
-                LogService.Info($"Restarting download for {remoteFile.FullPath}: saved chunk state was missing or incompatible.");
+                LogService.Info($"Restarting download for {remoteFile.FullPath}: saved chunk state was incompatible.");
             }
 
             entry.CompletedLength = entry.ChunkBytes.Sum();
@@ -70,7 +72,7 @@ public sealed class ParallelSftpDownloadService
             LogService.Info($"Resuming download: {remoteFile.FullPath} at {entry.CompletedLength} of {totalSize} bytes.");
         }
 
-        List<Task> tasks = new List<Task>();
+        List<Task> tasks = new();
         object sidecarLock = new();
 
         for (int i = 0; i < expectedChunkCount; i++)
@@ -83,7 +85,7 @@ public sealed class ParallelSftpDownloadService
             }
 
             long start = i * (totalSize / expectedChunkCount);
-            long end = (i == expectedChunkCount - 1) ? totalSize - 1 : start + chunkLength - 1;
+            long end = i == expectedChunkCount - 1 ? totalSize - 1 : start + chunkLength - 1;
 
             int chunkIndex = i;
             tasks.Add(DownloadChunkAsync(
@@ -154,7 +156,7 @@ public sealed class ParallelSftpDownloadService
             using Stream remote = client.OpenRead(remotePath);
             remote.Seek(start, SeekOrigin.Begin);
 
-            using FileStream local = new FileStream(
+            using FileStream local = new(
                 localPath,
                 FileMode.OpenOrCreate,
                 FileAccess.Write,
@@ -188,7 +190,6 @@ public sealed class ParallelSftpDownloadService
                 local.Write(buffer, 0, read);
                 position += read;
                 chunkWritten += read;
-
                 entry.SetChunkBytes(chunkIndex, chunkWritten);
 
                 long now = Environment.TickCount64;
@@ -219,11 +220,14 @@ public sealed class ParallelSftpDownloadService
         }
     }
 
-    private static void WriteDownloadSidecar(string sidecarPath, DownloadEntry entry, long totalLength)
+    private static void WriteDownloadSidecar(
+        string sidecarPath,
+        DownloadEntry entry,
+        long totalLength)
     {
         try
         {
-            TransferSidecar sidecar = new TransferSidecar
+            TransferSidecar sidecar = new()
             {
                 TransferId = entry.Id,
                 Direction = "Download",
@@ -243,7 +247,9 @@ public sealed class ParallelSftpDownloadService
         }
     }
 
-    private static async Task<SftpClient> ConnectWithRetryAsync(AppSettings settings, CancellationToken token)
+    private static async Task<SftpClient> ConnectWithRetryAsync(
+        AppSettings settings,
+        CancellationToken token)
     {
         Exception? lastError = null;
 
@@ -279,49 +285,45 @@ public sealed class ParallelSftpDownloadService
 
     public static SftpClient CreateClient(AppSettings settings)
     {
-        AuthenticationMethod auth = new PasswordAuthenticationMethod(settings.Username, settings.Password);
-        ConnectionInfo info = new ConnectionInfo(settings.Host, settings.Port, settings.Username, auth)
+        PasswordAuthenticationMethod auth = new(settings.Username, settings.Password);
+
+        ConnectionInfo info = new(
+            settings.Host,
+            settings.Port,
+            settings.Username,
+            auth)
         {
             Timeout = TimeSpan.FromSeconds(15)
         };
 
-        SftpClient client = new SftpClient(info)
+        return new SftpClient(info)
         {
             OperationTimeout = TimeSpan.FromSeconds(30),
             KeepAliveInterval = TimeSpan.FromSeconds(15)
         };
-
-        return client;
     }
 
     private static long ChunkLength(int chunkIndex, int chunkCount, long totalSize)
     {
         long chunkSize = totalSize / chunkCount;
 
-        if (chunkIndex == chunkCount - 1)
-        {
-            return totalSize - (chunkSize * (chunkCount - 1));
-        }
-
-        return chunkSize;
+        return chunkIndex == chunkCount - 1
+            ? totalSize - (chunkSize * (chunkCount - 1))
+            : chunkSize;
     }
 
-    public static string GetSidecarPath(string localPath)
-    {
-        return localPath + SidecarSuffix;
-    }
+    public static string GetSidecarPath(string localPath) =>
+        localPath + SidecarSuffix;
 
-    public static string GetTempFilePath(string localPath)
-    {
-        return GetSidecarPath(localPath);
-    }
+    public static string GetTempFilePath(string localPath) =>
+        GetSidecarPath(localPath);
 
     private sealed class TransferSidecar
     {
-        public string TransferId { get; set; } = string.Empty;
-        public string Direction { get; set; } = string.Empty;
-        public string RemotePath { get; set; } = string.Empty;
-        public string LocalPath { get; set; } = string.Empty;
+        public string TransferId { get; set; } = "";
+        public string Direction { get; set; } = "";
+        public string RemotePath { get; set; } = "";
+        public string LocalPath { get; set; } = "";
         public long TotalLength { get; set; }
         public long CompletedLength { get; set; }
         public long[] ChunkBytes { get; set; } = Array.Empty<long>();

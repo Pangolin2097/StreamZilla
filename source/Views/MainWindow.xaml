@@ -13,7 +13,7 @@
                       Command="{Binding PlacementTarget.Tag.NewFolderCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                       CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
             <MenuItem Header="Delete"
-                      Command="{Binding PlacementTarget.Tag.DeleteLocalItemCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                      Command="{Binding PlacementTarget.Tag.DeleteLocalItemsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                       CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
         </ContextMenu>
 
@@ -22,7 +22,7 @@
                       Command="{Binding PlacementTarget.Tag.NewRemoteFolderCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                       CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
             <MenuItem Header="Delete"
-                      Command="{Binding PlacementTarget.Tag.DeleteRemoteItemCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                      Command="{Binding PlacementTarget.Tag.DeleteRemoteItemsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                       CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
         </ContextMenu>
 
@@ -94,10 +94,9 @@
             </Setter>
         </Style>
 
-        <Style x:Key="RemoteItemStyle" TargetType="TreeViewItem">
+        <Style x:Key="EntryItemStyle" TargetType="TreeViewItem">
             <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
             <Setter Property="Tag" Value="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}"/>
-            <Setter Property="ContextMenu" Value="{StaticResource RemoteItemMenu}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TreeViewItem">
@@ -108,26 +107,34 @@
                                         <ColumnDefinition Width="16"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
+
                                     <ToggleButton x:Name="Expander"
                                                   Style="{StaticResource ExpanderToggleStyle}"
                                                   ClickMode="Press"
                                                   IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
                                                   Visibility="{Binding IsDirectory, Converter={StaticResource BoolToVisibility}}"/>
+
                                     <ContentPresenter x:Name="PART_Header"
                                                       Grid.Column="1"
                                                       ContentSource="Header"
                                                       HorizontalAlignment="Left"/>
                                 </Grid>
                             </Border>
-                            <ItemsPresenter x:Name="PART_ItemsHost" Margin="16,0,0,0" Visibility="Collapsed"/>
+
+                            <ItemsPresenter x:Name="PART_ItemsHost"
+                                            Margin="16,0,0,0"
+                                            Visibility="Collapsed"/>
                         </StackPanel>
+
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsExpanded" Value="True">
                                 <Setter TargetName="PART_ItemsHost" Property="Visibility" Value="Visible"/>
                             </Trigger>
+
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="#4A90D9"/>
                             </Trigger>
+
                             <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="#3F80C4"/>
                             </DataTrigger>
@@ -135,14 +142,21 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
-            <EventSetter Event="TreeViewItem.Expanded" Handler="RemoteItem_Expanded"/>
-            <EventSetter Event="TreeViewItem.Collapsed" Handler="RemoteItem_Collapsed"/>
+
+            <EventSetter Event="TreeViewItem.Expanded" Handler="Entry_Expanded"/>
+            <EventSetter Event="TreeViewItem.Collapsed" Handler="Entry_Collapsed"/>
         </Style>
 
-        <Style x:Key="LocalItemStyle" TargetType="TreeViewItem" BasedOn="{StaticResource RemoteItemStyle}">
+        <Style x:Key="LocalItemStyle"
+               TargetType="TreeViewItem"
+               BasedOn="{StaticResource EntryItemStyle}">
             <Setter Property="ContextMenu" Value="{StaticResource LocalItemMenu}"/>
-            <EventSetter Event="TreeViewItem.Expanded" Handler="LocalItem_Expanded"/>
-            <EventSetter Event="TreeViewItem.Collapsed" Handler="LocalItem_Collapsed"/>
+        </Style>
+
+        <Style x:Key="RemoteItemStyle"
+               TargetType="TreeViewItem"
+               BasedOn="{StaticResource EntryItemStyle}">
+            <Setter Property="ContextMenu" Value="{StaticResource RemoteItemMenu}"/>
         </Style>
     </Window.Resources>
 
@@ -197,10 +211,10 @@
                           AllowDrop="True"
                           Drop="LocalTree_Drop"
                           DragOver="LocalTree_DragOver"
-                          PreviewMouseLeftButtonDown="LocalTree_MouseDown"
+                          PreviewMouseLeftButtonDown="Tree_MouseDown"
                           MouseMove="LocalTree_MouseMove"
                           PreviewKeyDown="LocalTree_PreviewKeyDown"
-                          SelectedItemChanged="LocalTree_SelectedItemChanged">
+                          SelectedItemChanged="Tree_SelectedItemChanged">
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                             <StackPanel Orientation="Horizontal">
@@ -210,7 +224,10 @@
                                        Margin="0,0,6,0"
                                        VerticalAlignment="Center"/>
                                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
-                                <TextBlock Text="{Binding SizeDisplay}" Foreground="Gray" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding SizeDisplay}"
+                                           Foreground="Gray"
+                                           Margin="12,0,0,0"
+                                           VerticalAlignment="Center"/>
                             </StackPanel>
                         </HierarchicalDataTemplate>
                     </TreeView.ItemTemplate>
@@ -224,10 +241,10 @@
                           AllowDrop="True"
                           Drop="RemoteTree_Drop"
                           DragOver="RemoteTree_DragOver"
-                          PreviewMouseLeftButtonDown="RemoteTree_MouseDown"
+                          PreviewMouseLeftButtonDown="Tree_MouseDown"
                           MouseMove="RemoteTree_MouseMove"
                           PreviewKeyDown="RemoteTree_PreviewKeyDown"
-                          SelectedItemChanged="RemoteTree_SelectedItemChanged">
+                          SelectedItemChanged="Tree_SelectedItemChanged">
                     <TreeView.ItemTemplate>
                         <HierarchicalDataTemplate ItemsSource="{Binding Children}">
                             <StackPanel Orientation="Horizontal">
@@ -236,13 +253,11 @@
                                        Height="16"
                                        Margin="0,0,6,0"
                                        VerticalAlignment="Center"/>
-                                <TextBlock Text="{Binding Name}"
-                                           VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
                                 <TextBlock Text="{Binding SizeDisplay}"
                                            Foreground="Gray"
                                            Margin="12,0,0,0"
-                                           VerticalAlignment="Center"
-                                           ToolTip="Size"/>
+                                           VerticalAlignment="Center"/>
                             </StackPanel>
                         </HierarchicalDataTemplate>
                     </TreeView.ItemTemplate>
@@ -257,7 +272,7 @@
                       ResizeDirection="Rows"
                       Background="#DDDDDD"/>
 
-        <GroupBox Grid.Row="3" Header="Downloads" Margin="0,6,0,0">
+        <GroupBox Grid.Row="3" Header="Transfers" Margin="0,6,0,0">
             <Grid Margin="6">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -270,43 +285,57 @@
                     <Button Content="Clear queue" Command="{Binding ClearQueueCommand}" Margin="0,0,8,0"/>
                     <Button Content="Remove selected"
                             Command="{Binding RemoveSelectedCommand}"
-                            CommandParameter="{Binding SelectedItems, ElementName=DownloadsGrid}"/>
-                    <TextBlock Text="Downloaded:" VerticalAlignment="Center" Margin="16,0,6,0"/>
-                    <TextBlock Text="{Binding QueueCountDisplay}"
-                               VerticalAlignment="Center"
-                               FontWeight="SemiBold"/>
-                    <TextBlock Text="Size:" VerticalAlignment="Center" Margin="16,0,6,0"/>
-                    <TextBlock Text="{Binding TotalSizeDisplay}"
-                               VerticalAlignment="Center"
-                               FontWeight="SemiBold"/>
-                    <TextBlock Text="Total:" VerticalAlignment="Center" Margin="16,0,6,0"/>
-                    <TextBlock Text="{Binding TotalSpeedDisplay}"
-                               VerticalAlignment="Center"
-                               FontWeight="SemiBold"/>
-                    <TextBlock Text="Log:" VerticalAlignment="Center" Margin="16,0,6,0"/>
-                    <TextBlock Text="{Binding LogPath, RelativeSource={RelativeSource AncestorType=Window}}"
-                               VerticalAlignment="Center" Foreground="Gray"/>
+                            CommandParameter="{Binding SelectedItems, ElementName=TransfersGrid}"/>
                 </StackPanel>
 
-                <DataGrid Grid.Row="1" x:Name="DownloadsGrid"
+                <DataGrid Grid.Row="1"
+                          x:Name="TransfersGrid"
                           ItemsSource="{Binding Downloads}"
-                          SelectedItem="{Binding SelectedDownload}"
                           SelectionMode="Extended"
-                          AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False">
+                          AutoGenerateColumns="False"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="File" Binding="{Binding FileName}" Width="*" IsReadOnly="True"/>
-                        <DataGridTextColumn Header="Direction" Binding="{Binding DirectionDisplay}" Width="80" IsReadOnly="True"/>
-                        <DataGridTextColumn Header="Status" Binding="{Binding StatusDisplay}" Width="220" IsReadOnly="True"/>
+                        <DataGridTextColumn Header="File"
+                                            Binding="{Binding FileName}"
+                                            Width="*"
+                                            IsReadOnly="True"/>
+
+                        <DataGridTextColumn Header="Direction"
+                                            Binding="{Binding DirectionDisplay}"
+                                            Width="80"
+                                            IsReadOnly="True"/>
+
+                        <DataGridTextColumn Header="Status"
+                                            Binding="{Binding StatusDisplay}"
+                                            Width="220"
+                                            IsReadOnly="True"/>
+
                         <DataGridTemplateColumn Header="Progress" Width="240">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <ProgressBar Value="{Binding ProgressPercent, Mode=OneWay}" Maximum="100" Height="16"/>
+                                    <ProgressBar Value="{Binding ProgressPercent, Mode=OneWay}"
+                                                 Maximum="100"
+                                                 Height="16"/>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTextColumn Header="Amount" Binding="{Binding SizeDisplay}" Width="160" IsReadOnly="True"/>
-                        <DataGridTextColumn Header="Speed" Binding="{Binding SpeedDisplay}" Width="100" IsReadOnly="True"/>
-                        <DataGridTextColumn Header="ETA" Binding="{Binding EtaDisplay}" Width="90" IsReadOnly="True"/>
+
+                        <DataGridTextColumn Header="Amount"
+                                            Binding="{Binding SizeDisplay}"
+                                            Width="160"
+                                            IsReadOnly="True"/>
+
+                        <DataGridTextColumn Header="Speed"
+                                            Binding="{Binding SpeedDisplay}"
+                                            Width="100"
+                                            IsReadOnly="True"/>
+
+                        <DataGridTextColumn Header="ETA"
+                                            Binding="{Binding EtaDisplay}"
+                                            Width="90"
+                                            IsReadOnly="True"/>
+
                         <DataGridTemplateColumn Header="" Width="120">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
@@ -314,24 +343,26 @@
                                         <Button Style="{StaticResource IconButtonStyle}"
                                                 ToolTip="Pause"
                                                 IsEnabled="{Binding CanPause}"
-                                                Command="{Binding DataContext.PauseDownloadCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                Command="{Binding DataContext.PauseTransferCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 CommandParameter="{Binding}">
                                             <TextBlock Text="&#xE769;"
                                                        FontFamily="Segoe MDL2 Assets"
                                                        FontSize="14"/>
                                         </Button>
+
                                         <Button Style="{StaticResource IconButtonStyle}"
                                                 ToolTip="Resume"
                                                 IsEnabled="{Binding CanResume}"
-                                                Command="{Binding DataContext.ResumeDownloadCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                Command="{Binding DataContext.ResumeTransferCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 CommandParameter="{Binding}">
                                             <TextBlock Text="&#xE768;"
                                                        FontFamily="Segoe MDL2 Assets"
                                                        FontSize="14"/>
                                         </Button>
+
                                         <Button Style="{StaticResource IconButtonStyle}"
                                                 ToolTip="Remove"
-                                                Command="{Binding DataContext.RemoveDownloadCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                Command="{Binding DataContext.RemoveTransferCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 CommandParameter="{Binding}">
                                             <TextBlock Text="&#xE74D;"
                                                        FontFamily="Segoe MDL2 Assets"
