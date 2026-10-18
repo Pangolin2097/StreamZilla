@@ -1319,7 +1319,7 @@ public class MainViewModel : ViewModelBase
             DownloadItemViewModel next = _pendingQueue[0];
             _pendingQueue.RemoveAt(0);
 
-            if (next.IsFinished || !_downloads.Contains(next))
+            if (next.IsFinished || !Downloads.Contains(next))
             {
                 continue;
             }
