@@ -1,6 +1,4 @@
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Security.Cryptography;
 using Renci.SshNet;
 using Renci.SshNet.Common;
@@ -108,14 +106,14 @@ public sealed class SftpService : IDisposable
         return Convert.ToBase64String(hash);
     }
 
-    public List<RemoteEntry> ListDirectory(string path)
+    public List<RemoteFileEntry> ListDirectory(string path)
     {
         EnsureListConnected();
         _listGate.Wait();
 
         try
         {
-            List<RemoteEntry> items = new List<RemoteEntry>();
+            List<RemoteFileEntry> items = new List<RemoteFileEntry>();
             HashSet<int> uidsToResolve = new();
             HashSet<int> gidsToResolve = new();
 
@@ -134,7 +132,7 @@ public sealed class SftpService : IDisposable
             Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
             Dictionary<int, string> resolvedGids = ResolveGids(gidsToResolve);
 
-            foreach (RemoteEntry entry in items)
+            foreach (RemoteFileEntry entry in items)
             {
                 if (resolvedUids.TryGetValue(int.Parse(entry.Owner), out string? name))
                 {
@@ -158,14 +156,14 @@ public sealed class SftpService : IDisposable
         }
     }
 
-    public List<RemoteEntry> ListFilesRecursive(string directory)
+    public List<RemoteFileEntry> ListFilesRecursive(string directory)
     {
         EnsureListConnected();
         _listGate.Wait();
 
         try
         {
-            List<RemoteEntry> result = new List<RemoteEntry>();
+            List<RemoteFileEntry> result = new List<RemoteFileEntry>();
             Walk(directory, result);
             return result;
         }
@@ -175,13 +173,13 @@ public sealed class SftpService : IDisposable
         }
     }
 
-    private void Walk(string directory, List<RemoteEntry> output)
+    private void Walk(string directory, List<RemoteFileEntry> output)
     {
         EnsureConnected();
 
         HashSet<int> uidsToResolve = new();
         HashSet<int> gidsToResolve = new();
-        List<RemoteEntry> batch = new List<RemoteEntry>();
+        List<RemoteFileEntry> batch = new List<RemoteFileEntry>();
 
         foreach (SftpFile file in _listClient!.ListDirectory(directory))
         {
@@ -198,7 +196,7 @@ public sealed class SftpService : IDisposable
             {
                 uidsToResolve.Add(file.UserId);
                 gidsToResolve.Add(file.GroupId);
-                batch.Add(new RemoteEntry
+                batch.Add(new RemoteFileEntry
                 {
                     Name = file.Name,
                     FullPath = file.FullName,
@@ -207,7 +205,7 @@ public sealed class SftpService : IDisposable
                     Owner = file.UserId.ToString(),
                     Group = file.GroupId.ToString(),
                     Permissions = FormatPermissions(file.Attributes),
-                    LastModified = file.LastWriteTime,
+                    Modified = file.LastWriteTime,
                     Created = file.LastAccessTime
                 });
             }
@@ -216,7 +214,7 @@ public sealed class SftpService : IDisposable
         Dictionary<int, string> resolvedUids = ResolveUids(uidsToResolve);
         Dictionary<int, string> resolvedGids = ResolveGids(gidsToResolve);
 
-        foreach (RemoteEntry entry in batch)
+        foreach (RemoteFileEntry entry in batch)
         {
             if (resolvedUids.TryGetValue(int.Parse(entry.Owner), out string? name))
             {
@@ -232,9 +230,9 @@ public sealed class SftpService : IDisposable
         }
     }
 
-    private static RemoteEntry CreateRemoteEntry(SftpFile file)
+    private static RemoteFileEntry CreateRemoteEntry(SftpFile file)
     {
-        return new RemoteEntry
+        return new RemoteFileEntry
         {
             Name = file.Name,
             FullPath = file.FullName,
@@ -243,7 +241,7 @@ public sealed class SftpService : IDisposable
             Owner = file.UserId.ToString(),
             Group = file.GroupId.ToString(),
             Permissions = FormatPermissions(file.Attributes),
-            LastModified = file.LastWriteTime,
+            Modified = file.LastWriteTime,
             Created = file.LastAccessTime
         };
     }

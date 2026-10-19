@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.ObjectModel;
 using System.Windows.Media;
 using StreamZilla.Models;
@@ -8,12 +7,12 @@ namespace StreamZilla.ViewModels;
 
 public class RemoteItemViewModel : ViewModelBase
 {
-    private readonly RemoteEntry _entry;
+    private readonly RemoteFileEntry _entry;
     private bool _isHighlighted;
     private bool _isExpanded;
     private bool _childrenLoaded;
 
-    public RemoteItemViewModel(RemoteEntry entry, RemoteItemViewModel? parent = null)
+    public RemoteItemViewModel(RemoteFileEntry entry, RemoteItemViewModel? parent = null)
     {
         _entry = entry;
         Parent = parent;
@@ -22,7 +21,7 @@ public class RemoteItemViewModel : ViewModelBase
 
     public RemoteItemViewModel? Parent { get; }
 
-    public RemoteEntry Entry
+    public RemoteFileEntry Entry
     {
         get
         {
@@ -117,12 +116,12 @@ public class RemoteItemViewModel : ViewModelBase
     {
         get
         {
-            if (_entry.LastModified == null)
+            if (_entry.Modified == null)
             {
                 return "";
             }
 
-            return _entry.LastModified.Value.ToLocalTime().ToString("g");
+            return _entry.Modified.Value.ToLocalTime().ToString("g");
         }
     }
 

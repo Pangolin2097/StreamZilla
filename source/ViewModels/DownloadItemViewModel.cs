@@ -5,18 +5,18 @@ namespace StreamZilla.ViewModels;
 
 public class DownloadItemViewModel : ViewModelBase
 {
-    private readonly DownloadEntry _entry;
-    private readonly RemoteEntry _remoteFile;
+    private readonly TransferEntry _entry;
+    private readonly RemoteFileEntry _remoteFile;
     private long _lastPollCompleted;
     private long _downloadSpeed;
 
-    public DownloadItemViewModel(DownloadEntry entry, RemoteEntry? remoteFile = null)
+    public DownloadItemViewModel(TransferEntry entry, RemoteFileEntry? remoteFile = null)
     {
         _entry = entry;
 
         if (remoteFile == null)
         {
-            _remoteFile = new RemoteEntry
+            _remoteFile = new RemoteFileEntry
             {
                 Name = Path.GetFileName(entry.RemotePath),
                 FullPath = entry.RemotePath,
@@ -30,7 +30,7 @@ public class DownloadItemViewModel : ViewModelBase
         }
     }
 
-    public DownloadEntry Entry
+    public TransferEntry Entry
     {
         get
         {
@@ -38,7 +38,7 @@ public class DownloadItemViewModel : ViewModelBase
         }
     }
 
-    public RemoteEntry RemoteFile
+    public RemoteFileEntry RemoteFile
     {
         get
         {

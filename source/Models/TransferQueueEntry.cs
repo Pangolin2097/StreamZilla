@@ -1,6 +1,6 @@
 namespace StreamZilla.Models;
 
-public class DownloadQueueEntry
+public class TransferQueueEntry
 {
     public string Id { get; set; } = "";
     public string FileName { get; set; } = "";

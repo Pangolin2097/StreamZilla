@@ -1,7 +1,6 @@
 using System.Collections;
 using System.Collections.ObjectModel;
 using System.IO;
-using System.Linq;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -421,7 +420,7 @@ public class MainViewModel : ViewModelBase
 
     private async Task LoadRemoteRootAsync()
     {
-        RemoteEntry rootEntry = new RemoteEntry
+        RemoteFileEntry rootEntry = new RemoteFileEntry
         {
             Name = "/",
             FullPath = "/",
@@ -434,7 +433,7 @@ public class MainViewModel : ViewModelBase
             ChildrenLoaded = true
         };
 
-        foreach (RemoteEntry child in _sftp.ListDirectory("/"))
+        foreach (RemoteFileEntry child in _sftp.ListDirectory("/"))
         {
             root.Children.Add(new RemoteItemViewModel(child, root));
         }
@@ -468,10 +467,10 @@ public class MainViewModel : ViewModelBase
         {
             if (!item.ChildrenLoaded)
             {
-                List<RemoteEntry> children = _sftp.ListDirectory(item.FullPath);
+                List<RemoteFileEntry> children = _sftp.ListDirectory(item.FullPath);
                 item.Children.Clear();
 
-                foreach (RemoteEntry child in children)
+                foreach (RemoteFileEntry child in children)
                 {
                     item.Children.Add(new RemoteItemViewModel(child, item));
                 }
@@ -560,10 +559,10 @@ public class MainViewModel : ViewModelBase
         {
             try
             {
-                List<RemoteEntry> children = _sftp.ListDirectory(item.FullPath);
+                List<RemoteFileEntry> children = _sftp.ListDirectory(item.FullPath);
                 item.Children.Clear();
 
-                foreach (RemoteEntry child in children)
+                foreach (RemoteFileEntry child in children)
                 {
                     item.Children.Add(new RemoteItemViewModel(child, item));
                 }
@@ -637,7 +636,7 @@ public class MainViewModel : ViewModelBase
             {
                 foreach (RemoteItemViewModel item in expandedDirectories)
                 {
-                    List<RemoteEntry> children;
+                    List<RemoteFileEntry> children;
 
                     try
                     {
@@ -667,7 +666,7 @@ public class MainViewModel : ViewModelBase
 
                         item.Children.Clear();
 
-                        foreach (RemoteEntry child in children)
+                        foreach (RemoteFileEntry child in children)
                         {
                             item.Children.Add(new RemoteItemViewModel(child, item));
                         }
@@ -697,7 +696,7 @@ public class MainViewModel : ViewModelBase
 
         foreach (DriveInfo drive in DriveInfo.GetDrives())
         {
-            LocalEntry entry = new LocalEntry
+            LocalFileEntry entry = new LocalFileEntry
             {
                 Name = drive.Name,
                 FullPath = drive.RootDirectory.FullName,
@@ -800,7 +799,7 @@ public class MainViewModel : ViewModelBase
 
         foreach (string directory in Directory.GetDirectories(item.FullPath))
         {
-            LocalEntry entry = new LocalEntry
+            LocalFileEntry entry = new LocalFileEntry
             {
                 Name = Path.GetFileName(directory),
                 FullPath = directory,
@@ -814,7 +813,7 @@ public class MainViewModel : ViewModelBase
         {
             FileInfo fileInfo = new FileInfo(file);
 
-            LocalEntry entry = new LocalEntry
+            LocalFileEntry entry = new LocalFileEntry
             {
                 Name = Path.GetFileName(file),
                 FullPath = file,
@@ -1177,7 +1176,7 @@ public class MainViewModel : ViewModelBase
             {
                 string remotePath = directory.FullPath == "/" ? "/" + item.Name : directory.FullPath + "/" + item.Name;
 
-                DownloadEntry entry = new DownloadEntry
+                TransferEntry entry = new TransferEntry
                 {
                     Id = Guid.NewGuid().ToString(),
                     FileName = item.Name,
@@ -1213,7 +1212,7 @@ public class MainViewModel : ViewModelBase
                 string remotePath = remoteDir == "/" ? "/" + fileName : remoteDir + "/" + fileName;
                 long fileSize = new FileInfo(file).Length;
 
-                DownloadEntry entry = new DownloadEntry
+                TransferEntry entry = new TransferEntry
                 {
                     Id = Guid.NewGuid().ToString(),
                     FileName = fileName,
@@ -1239,7 +1238,7 @@ public class MainViewModel : ViewModelBase
 
     private DownloadItemViewModel AddScanningPlaceholder(RemoteItemViewModel directory, LocalItemViewModel target)
     {
-        DownloadEntry entry = new DownloadEntry
+        TransferEntry entry = new TransferEntry
         {
             Id = Guid.NewGuid().ToString(),
             FileName = directory.Name,
@@ -1261,7 +1260,7 @@ public class MainViewModel : ViewModelBase
         LocalItemViewModel target,
         DownloadItemViewModel placeholder)
     {
-        List<RemoteEntry> remoteFiles;
+        List<RemoteFileEntry> remoteFiles;
 
         try
         {
@@ -1285,7 +1284,7 @@ public class MainViewModel : ViewModelBase
 
             string prefix = directory.FullPath.TrimEnd('/') + "/";
 
-            foreach (RemoteEntry remoteFile in remoteFiles)
+            foreach (RemoteFileEntry remoteFile in remoteFiles)
             {
                 string relative = remoteFile.FullPath[prefix.Length..];
                 string localPath = Path.Combine(
@@ -1305,7 +1304,7 @@ public class MainViewModel : ViewModelBase
 
     // ---------- Downloads ----------
 
-    private void StartDownload(RemoteEntry remoteFile, string localPath)
+    private void StartDownload(RemoteFileEntry remoteFile, string localPath)
     {
         bool exists = Downloads.Any(x =>
             x.RemotePath.Equals(remoteFile.FullPath, StringComparison.OrdinalIgnoreCase) &&
@@ -1316,7 +1315,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        DownloadEntry entry = new DownloadEntry
+        TransferEntry entry = new TransferEntry
         {
             Id = Guid.NewGuid().ToString(),
             FileName = Path.GetFileName(localPath),
@@ -1393,10 +1392,10 @@ public class MainViewModel : ViewModelBase
 
     private void LoadPersistedDownloads()
     {
-        List<DownloadEntry> persisted = DownloadQueueService.Load(_currentConnectionKey);
+        List<TransferEntry> persisted = DownloadQueueService.Load(_currentConnectionKey);
         int restored = 0;
 
-        foreach (DownloadEntry entry in persisted)
+        foreach (TransferEntry entry in persisted)
         {
             bool exists = Downloads.Any(x =>
                 x.RemotePath.Equals(entry.RemotePath, StringComparison.OrdinalIgnoreCase) &&
@@ -1426,7 +1425,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        List<DownloadEntry> snapshot = Downloads.Select(x => x.Entry).ToList();
+        List<TransferEntry> snapshot = Downloads.Select(x => x.Entry).ToList();
         string connectionKey = _currentConnectionKey;
 
         Task.Run(async () =>
@@ -1693,7 +1692,7 @@ public class MainViewModel : ViewModelBase
             }
             else
             {
-                LocalEntry entry = new LocalEntry
+                LocalFileEntry entry = new LocalFileEntry
                 {
                     Name = name,
                     FullPath = newFolderPath,
@@ -1871,7 +1870,7 @@ public class MainViewModel : ViewModelBase
             string fileName = Path.GetFileName(localPath);
             string remotePath = directory.FullPath == "/" ? "/" + fileName : directory.FullPath + "/" + fileName;
 
-            DownloadEntry entry = new DownloadEntry
+            TransferEntry entry = new TransferEntry
             {
                 Id = Guid.NewGuid().ToString(),
                 FileName = fileName,
@@ -1888,7 +1887,7 @@ public class MainViewModel : ViewModelBase
     }
 
     private void StartUpload(
-        DownloadEntry entry,
+        TransferEntry entry,
         DownloadItemViewModel itemVm,
         string localPath,
         string remotePath,
@@ -2007,8 +2006,8 @@ public class MainViewModel : ViewModelBase
 
             if (parent.ChildrenLoaded)
             {
-                List<RemoteEntry> entries = _sftp.ListDirectory(parent.FullPath);
-                RemoteEntry? newEntry = entries.FirstOrDefault(e => e.FullPath == remotePath);
+                List<RemoteFileEntry> entries = _sftp.ListDirectory(parent.FullPath);
+                RemoteFileEntry? newEntry = entries.FirstOrDefault(e => e.FullPath == remotePath);
 
                 if (newEntry != null)
                 {
@@ -2075,10 +2074,10 @@ public class MainViewModel : ViewModelBase
     {
         try
         {
-            List<RemoteEntry> children = _sftp.ListDirectory(item.FullPath);
+            List<RemoteFileEntry> children = _sftp.ListDirectory(item.FullPath);
             item.Children.Clear();
 
-            foreach (RemoteEntry child in children)
+            foreach (RemoteFileEntry child in children)
             {
                 item.Children.Add(new RemoteItemViewModel(child, item));
             }

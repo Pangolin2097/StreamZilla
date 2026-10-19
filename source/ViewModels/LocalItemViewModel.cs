@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.ObjectModel;
 using System.Windows.Media;
 using StreamZilla.Models;
@@ -8,12 +7,12 @@ namespace StreamZilla.ViewModels;
 
 public class LocalItemViewModel : ViewModelBase
 {
-    private readonly LocalEntry _entry;
+    private readonly LocalFileEntry _entry;
     private bool _isExpanded;
     private bool _childrenLoaded;
     private bool _isHighlighted;
 
-    public LocalItemViewModel(LocalEntry entry, LocalItemViewModel? parent = null)
+    public LocalItemViewModel(LocalFileEntry entry, LocalItemViewModel? parent = null)
     {
         _entry = entry;
         Parent = parent;
@@ -22,7 +21,7 @@ public class LocalItemViewModel : ViewModelBase
 
     public LocalItemViewModel? Parent { get; }
 
-    public LocalEntry Entry
+    public LocalFileEntry Entry
     {
         get
         {
@@ -93,11 +92,11 @@ public class LocalItemViewModel : ViewModelBase
     {
         get
         {
-            return _entry.Modified.ToString("g");
+            return _entry.Modified.HasValue ? _entry.Modified.Value.ToString("g") : string.Empty;
         }
     }
 
-    public DateTime Modified
+    public DateTime? Modified
     {
         get
         {
@@ -105,7 +104,7 @@ public class LocalItemViewModel : ViewModelBase
         }
     }
 
-    public DateTime Created
+    public DateTime? Created
     {
         get
         {
@@ -117,7 +116,7 @@ public class LocalItemViewModel : ViewModelBase
     {
         get
         {
-            return _entry.Created.ToString("g");
+            return _entry.Created.HasValue ? _entry.Created.Value.ToString("g") : string.Empty;
         }
     }
 

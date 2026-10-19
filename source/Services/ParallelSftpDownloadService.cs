@@ -1,8 +1,5 @@
 using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 using Renci.SshNet;
-using Renci.SshNet.Sftp;
 using StreamZilla.Models;
 
 namespace StreamZilla.Services;
@@ -19,10 +16,10 @@ public sealed class ParallelSftpDownloadService
 
     public async Task DownloadAsync(
         AppSettings settings,
-        RemoteEntry remoteFile,
+        RemoteFileEntry remoteFile,
         string localPath,
         int connections,
-        DownloadEntry entry,
+        TransferEntry entry,
         CancellationToken token)
     {
         long totalSize = remoteFile.Size;
@@ -168,7 +165,7 @@ public sealed class ParallelSftpDownloadService
         string tempPath,
         long start,
         long end,
-        DownloadEntry entry,
+        TransferEntry entry,
         int chunkIndex,
         CancellationToken token)
     {
