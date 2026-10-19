@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -9,8 +10,7 @@ namespace StreamZilla.Services;
 
 public static class FileIconService
 {
-    private static readonly object _lock = new object();
-    private static readonly Dictionary<string, ImageSource> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, ImageSource> _cache = new(StringComparer.OrdinalIgnoreCase);
 
     public static ImageSource GetFileIcon(string fileName, bool isDirectory, bool isDrive = false)
     {
@@ -25,15 +25,12 @@ public static class FileIconService
         }
         else
         {
-            key = fileName.ToLowerInvariant();
+            key = Path.GetExtension(fileName.ToLowerInvariant());
         }
 
-        lock (_lock)
+        if (_cache.TryGetValue(key, out ImageSource? cached))
         {
-            if (_cache.TryGetValue(key, out ImageSource? cached))
-            {
-                return cached;
-            }
+            return cached;
         }
 
         ImageSource icon;
@@ -51,10 +48,7 @@ public static class FileIconService
             icon = GetFileIconForFile(fileName);
         }
 
-        lock (_lock)
-        {
-            _cache[key] = icon;
-        }
+        _cache.TryAdd(key, icon);
 
         return icon;
     }

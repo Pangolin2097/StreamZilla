@@ -6,7 +6,7 @@ using StreamZilla.Models;
 
 namespace StreamZilla.Services;
 
-public static class DownloadQueueService
+public static class TransferQueueService
 {
     private static readonly string QueueDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StreamZilla", "queues");
 

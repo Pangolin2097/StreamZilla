@@ -44,7 +44,7 @@ public partial class MainWindow : Window
     {
         Dispatcher.BeginInvoke(() =>
         {
-            LocalItemViewModel? lastLocal = _viewModel.LastLocalFolder;
+            LocalFileViewModel? lastLocal = _viewModel.LastLocalFolder;
 
             if (lastLocal != null)
             {
@@ -53,7 +53,7 @@ public partial class MainWindow : Window
         }, DispatcherPriority.Loaded);
     }
 
-    private void ScrollLocalItemIntoView(LocalItemViewModel item)
+    private void ScrollLocalItemIntoView(LocalFileViewModel item)
     {
         if (LocalTree.ItemContainerGenerator.ContainerFromItem(item) is TreeViewItem container)
         {
@@ -63,7 +63,7 @@ public partial class MainWindow : Window
 
         foreach (object root in LocalTree.Items)
         {
-            if (root is LocalItemViewModel rootItem &&
+            if (root is LocalFileViewModel rootItem &&
                 TryFindLocalContainerRecursive(LocalTree.ItemContainerGenerator, rootItem, item, out TreeViewItem? found))
             {
                 if (found != null)
@@ -76,7 +76,7 @@ public partial class MainWindow : Window
         }
     }
 
-    public void ScrollRemoteItemIntoView(RemoteItemViewModel item)
+    public void ScrollRemoteItemIntoView(RemoteFileViewModel item)
     {
         if (RemoteTree.ItemContainerGenerator.ContainerFromItem(item) is TreeViewItem container)
         {
@@ -86,7 +86,7 @@ public partial class MainWindow : Window
 
         foreach (object root in RemoteTree.Items)
         {
-            if (root is RemoteItemViewModel rootItem &&
+            if (root is RemoteFileViewModel rootItem &&
                 TryFindRemoteContainerRecursive(RemoteTree.ItemContainerGenerator, rootItem, item, out TreeViewItem? found))
             {
                 if (found != null)
@@ -146,8 +146,8 @@ public partial class MainWindow : Window
 
     private static bool TryFindLocalContainerRecursive(
         ItemContainerGenerator generator,
-        LocalItemViewModel current,
-        LocalItemViewModel target,
+        LocalFileViewModel current,
+        LocalFileViewModel target,
         out TreeViewItem? found)
     {
         found = null;
@@ -162,7 +162,7 @@ public partial class MainWindow : Window
         {
             foreach (object child in current.Children)
             {
-                if (child is LocalItemViewModel childItem &&
+                if (child is LocalFileViewModel childItem &&
                     TryFindLocalContainerRecursive(container.ItemContainerGenerator, childItem, target, out found))
                 {
                     return true;
@@ -175,8 +175,8 @@ public partial class MainWindow : Window
 
     private static bool TryFindRemoteContainerRecursive(
         ItemContainerGenerator generator,
-        RemoteItemViewModel current,
-        RemoteItemViewModel target,
+        RemoteFileViewModel current,
+        RemoteFileViewModel target,
         out TreeViewItem? found)
     {
         found = null;
@@ -191,7 +191,7 @@ public partial class MainWindow : Window
         {
             foreach (object child in current.Children)
             {
-                if (child is RemoteItemViewModel childItem &&
+                if (child is RemoteFileViewModel childItem &&
                     TryFindRemoteContainerRecursive(container.ItemContainerGenerator, childItem, target, out found))
                 {
                     return true;
@@ -202,13 +202,13 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private RemoteItemViewModel? GetRemoteItemUnderMouse(object? source)
+    private RemoteFileViewModel? GetRemoteItemUnderMouse(object? source)
     {
         DependencyObject? current = source as DependencyObject;
 
         while (current != null)
         {
-            if (current is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteItemViewModel item)
+            if (current is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteFileViewModel item)
             {
                 return item;
             }
@@ -219,13 +219,13 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private LocalItemViewModel? GetLocalItemUnderMouse(object? source)
+    private LocalFileViewModel? GetLocalItemUnderMouse(object? source)
     {
         DependencyObject? current = source as DependencyObject;
 
         while (current != null)
         {
-            if (current is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalItemViewModel item)
+            if (current is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalFileViewModel item)
             {
                 return item;
             }
@@ -238,7 +238,7 @@ public partial class MainWindow : Window
 
     private void RemoteItem_Expanded(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteItemViewModel item)
+        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteFileViewModel item)
         {
             _viewModel.OnRemoteItemExpanded(item);
         }
@@ -246,7 +246,7 @@ public partial class MainWindow : Window
 
     private void RemoteItem_Collapsed(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteItemViewModel item)
+        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is RemoteFileViewModel item)
         {
             _viewModel.OnRemoteItemCollapsed(item);
         }
@@ -254,7 +254,7 @@ public partial class MainWindow : Window
 
     private void RemoteTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-        _viewModel.OnRemoteSelectionChanged(e.NewValue as RemoteItemViewModel);
+        _viewModel.OnRemoteSelectionChanged(e.NewValue as RemoteFileViewModel);
     }
 
     private void RemoteTree_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -264,9 +264,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<RemoteItemViewModel> items = _viewModel.GetHighlightedRemoteItems();
+        List<RemoteFileViewModel> items = _viewModel.GetHighlightedRemoteItems();
 
-        if (items.Count == 0 && RemoteTree.SelectedItem is RemoteItemViewModel selected)
+        if (items.Count == 0 && RemoteTree.SelectedItem is RemoteFileViewModel selected)
         {
             items.Add(selected);
         }
@@ -287,7 +287,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        RemoteItemViewModel? item = GetRemoteItemUnderMouse(e.OriginalSource);
+        RemoteFileViewModel? item = GetRemoteItemUnderMouse(e.OriginalSource);
 
         if (item == null)
         {
@@ -304,7 +304,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        RemoteItemViewModel? underMouse = GetRemoteItemUnderMouse(e.OriginalSource);
+        RemoteFileViewModel? underMouse = GetRemoteItemUnderMouse(e.OriginalSource);
 
         if (underMouse == null)
         {
@@ -320,7 +320,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<RemoteItemViewModel> selectedItems = _viewModel.GetHighlightedRemoteItems();
+        List<RemoteFileViewModel> selectedItems = _viewModel.GetHighlightedRemoteItems();
 
         if (selectedItems.Count == 0)
         {
@@ -362,14 +362,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        LocalItemViewModel? target = GetLocalItemUnderMouse(e.OriginalSource);
+        LocalFileViewModel? target = GetLocalItemUnderMouse(e.OriginalSource);
 
         if (target == null)
         {
             target = _viewModel.LastLocalFolder;
         }
 
-        List<RemoteItemViewModel> items = (List<RemoteItemViewModel>)e.Data.GetData("StreamZillaRemoteItems");
+        List<RemoteFileViewModel> items = (List<RemoteFileViewModel>)e.Data.GetData("StreamZillaRemoteItems");
 
         _viewModel.HandleRemoteDrop(items, target);
     }
@@ -383,7 +383,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        LocalItemViewModel? item = GetLocalItemUnderMouse(e.OriginalSource);
+        LocalFileViewModel? item = GetLocalItemUnderMouse(e.OriginalSource);
 
         if (item == null)
         {
@@ -400,7 +400,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        LocalItemViewModel? underMouse = GetLocalItemUnderMouse(e.OriginalSource);
+        LocalFileViewModel? underMouse = GetLocalItemUnderMouse(e.OriginalSource);
 
         if (underMouse == null)
         {
@@ -416,7 +416,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<LocalItemViewModel> selectedItems = _viewModel.GetHighlightedLocalItems();
+        List<LocalFileViewModel> selectedItems = _viewModel.GetHighlightedLocalItems();
 
         if (selectedItems.Count == 0)
         {
@@ -458,21 +458,21 @@ public partial class MainWindow : Window
             return;
         }
 
-        RemoteItemViewModel? target = GetRemoteItemUnderMouse(e.OriginalSource);
+        RemoteFileViewModel? target = GetRemoteItemUnderMouse(e.OriginalSource);
 
         if (target == null)
         {
             target = null;
         }
 
-        List<LocalItemViewModel> items = (List<LocalItemViewModel>)e.Data.GetData("StreamZillaLocalItems");
+        List<LocalFileViewModel> items = (List<LocalFileViewModel>)e.Data.GetData("StreamZillaLocalItems");
 
         _viewModel.HandleLocalDrop(items, target);
     }
 
     private void LocalItem_Expanded(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalItemViewModel item)
+        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalFileViewModel item)
         {
             _viewModel.OnLocalItemExpanded(item);
         }
@@ -480,7 +480,7 @@ public partial class MainWindow : Window
 
     private void LocalItem_Collapsed(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalItemViewModel item)
+        if (e.OriginalSource is TreeViewItem treeViewItem && treeViewItem.DataContext is LocalFileViewModel item)
         {
             _viewModel.OnLocalItemCollapsed(item);
         }
@@ -488,7 +488,7 @@ public partial class MainWindow : Window
 
     private void LocalTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-        _viewModel.OnLocalSelectionChanged(e.NewValue as LocalItemViewModel);
+        _viewModel.OnLocalSelectionChanged(e.NewValue as LocalFileViewModel);
     }
 
     private void LocalTree_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -498,9 +498,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        List<LocalItemViewModel> items = _viewModel.GetHighlightedLocalItems();
+        List<LocalFileViewModel> items = _viewModel.GetHighlightedLocalItems();
 
-        if (items.Count == 0 && LocalTree.SelectedItem is LocalItemViewModel selected)
+        if (items.Count == 0 && LocalTree.SelectedItem is LocalFileViewModel selected)
         {
             items.Add(selected);
         }

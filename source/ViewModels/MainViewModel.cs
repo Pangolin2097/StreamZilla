@@ -20,15 +20,14 @@ public class MainViewModel : ViewModelBase
     private readonly DispatcherTimer _pollTimer = new DispatcherTimer();
     private readonly DispatcherTimer _remoteRefreshTimer = new DispatcherTimer();
     private readonly Dictionary<string, FileSystemWatcher> _localWatchers = new Dictionary<string, FileSystemWatcher>();
-    private readonly List<DownloadItemViewModel> _pendingQueue = new List<DownloadItemViewModel>();
+    private readonly List<TransferItemViewModel> _pendingQueue = new List<TransferItemViewModel>();
     private readonly HashSet<string> _activeDownloadIds = new HashSet<string>();
     private readonly SemaphoreSlim _queueSaveGate = new SemaphoreSlim(1, 1);
 
     private AppSettings _settings;
     private string _currentConnectionKey = "";
-    private RemoteItemViewModel? _selectionAnchor;
-    private LocalItemViewModel? _lastLocalFolder;
-    private LocalItemViewModel? _selectedLocalItem;
+    private RemoteFileViewModel? _selectionAnchor;
+    private LocalFileViewModel? _lastLocalFolder;
     private string _maxStreamsDisplay;
     private string _maxFilesDisplay;
 
@@ -40,9 +39,9 @@ public class MainViewModel : ViewModelBase
         _maxStreamsDisplay = Math.Clamp(_settings.ParallelConnections, 1, 8).ToString();
         _maxFilesDisplay = Math.Clamp(_settings.MaxConcurrentDownloads, 1, 8).ToString();
 
-        Downloads = new ObservableCollection<DownloadItemViewModel>();
-        LocalRoots = new ObservableCollection<LocalItemViewModel>();
-        RemoteRoots = new ObservableCollection<RemoteItemViewModel>();
+        Downloads = new ObservableCollection<TransferItemViewModel>();
+        LocalRoots = new ObservableCollection<LocalFileViewModel>();
+        RemoteRoots = new ObservableCollection<RemoteFileViewModel>();
 
         Downloads.CollectionChanged += (object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs _) =>
         {
@@ -60,22 +59,22 @@ public class MainViewModel : ViewModelBase
             (object? parameter) => RemoveSelected(parameter as IList),
             (object? parameter) => parameter is IList list && list.Count > 0);
         PauseDownloadCommand = new RelayCommand(
-            (object? parameter) => { if (parameter is DownloadItemViewModel download) { PauseDownload(download); } },
-            (object? parameter) => parameter is DownloadItemViewModel download && download.CanPause);
+            (object? parameter) => { if (parameter is TransferItemViewModel download) { PauseDownload(download); } },
+            (object? parameter) => parameter is TransferItemViewModel download && download.CanPause);
         ResumeDownloadCommand = new RelayCommand(
-            (object? parameter) => { if (parameter is DownloadItemViewModel download) { ResumeDownload(download); } },
-            (object? parameter) => parameter is DownloadItemViewModel download && download.CanResume);
-        RemoveDownloadCommand = new RelayCommand((object? parameter) => { if (parameter is DownloadItemViewModel download) { RemoveDownload(download); } });
-        NewFolderCommand = new RelayCommand((object? parameter) => { if (parameter is LocalItemViewModel localItem) { NewFolder(localItem); } });
-        DeleteLocalItemCommand = new RelayCommand((object? parameter) => { if (parameter is LocalItemViewModel localItem) { DeleteLocalItem(localItem); } });
+            (object? parameter) => { if (parameter is TransferItemViewModel download) { ResumeDownload(download); } },
+            (object? parameter) => parameter is TransferItemViewModel download && download.CanResume);
+        RemoveDownloadCommand = new RelayCommand((object? parameter) => { if (parameter is TransferItemViewModel download) { RemoveDownload(download); } });
+        NewFolderCommand = new RelayCommand((object? parameter) => { if (parameter is LocalFileViewModel localItem) { NewFolder(localItem); } });
+        DeleteLocalItemCommand = new RelayCommand((object? parameter) => { if (parameter is LocalFileViewModel localItem) { DeleteLocalItem(localItem); } });
         UploadCommand = new RelayCommand(
-            (object? parameter) => { if (parameter is RemoteItemViewModel remoteItem) { UploadToRemote(remoteItem); } },
+            (object? parameter) => { if (parameter is RemoteFileViewModel remoteItem) { UploadToRemote(remoteItem); } },
             (object? parameter) => _sftp.IsConnected);
         NewRemoteFolderCommand = new RelayCommand(
-            (object? parameter) => { if (parameter is RemoteItemViewModel remoteItem) { NewRemoteFolder(remoteItem); } },
+            (object? parameter) => { if (parameter is RemoteFileViewModel remoteItem) { NewRemoteFolder(remoteItem); } },
             (object? parameter) => _sftp.IsConnected);
         DeleteRemoteItemCommand = new RelayCommand(
-            (object? parameter) => { if (parameter is RemoteItemViewModel remoteItem) { DeleteRemoteItem(remoteItem); } },
+            (object? parameter) => { if (parameter is RemoteFileViewModel remoteItem) { DeleteRemoteItem(remoteItem); } },
             (object? parameter) => _sftp.IsConnected);
 
         LoadLocalDrives();
@@ -91,7 +90,7 @@ public class MainViewModel : ViewModelBase
         LogService.Info("StreamZilla started.");
     }
 
-    public event Action<RemoteItemViewModel>? ScrollToRemoteItemRequested;
+    public event Action<RemoteFileViewModel>? ScrollToRemoteItemRequested;
 
     public RelayCommand ConnectCommand { get; }
     public RelayCommand DisconnectCommand { get; }
@@ -109,9 +108,9 @@ public class MainViewModel : ViewModelBase
     public RelayCommand NewRemoteFolderCommand { get; }
     public RelayCommand DeleteRemoteItemCommand { get; }
 
-    public ObservableCollection<DownloadItemViewModel> Downloads { get; }
-    public ObservableCollection<LocalItemViewModel> LocalRoots { get; }
-    public ObservableCollection<RemoteItemViewModel> RemoteRoots { get; }
+    public ObservableCollection<TransferItemViewModel> Downloads { get; }
+    public ObservableCollection<LocalFileViewModel> LocalRoots { get; }
+    public ObservableCollection<RemoteFileViewModel> RemoteRoots { get; }
 
     public bool IsConnected
     {
@@ -233,9 +232,9 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public DownloadItemViewModel? SelectedDownload { get; set; }
+    public TransferItemViewModel? SelectedDownload { get; set; }
 
-    public LocalItemViewModel? LastLocalFolder
+    public LocalFileViewModel? LastLocalFolder
     {
         get
         {
@@ -309,7 +308,7 @@ public class MainViewModel : ViewModelBase
                 return;
             }
 
-            _currentConnectionKey = DownloadQueueService.GetConnectionKey(
+            _currentConnectionKey = TransferQueueService.GetConnectionKey(
                 _settings.Host, _settings.Port, _settings.Username);
 
             RemoteRoots.Clear();
@@ -378,7 +377,7 @@ public class MainViewModel : ViewModelBase
     {
         try
         {
-            foreach (DownloadItemViewModel item in Downloads.ToList())
+            foreach (TransferItemViewModel item in Downloads.ToList())
             {
                 if ((item.Status.Equals("Active", StringComparison.OrdinalIgnoreCase) ||
                      item.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase)) &&
@@ -427,7 +426,7 @@ public class MainViewModel : ViewModelBase
             IsDirectory = true
         };
 
-        RemoteItemViewModel root = new RemoteItemViewModel(rootEntry)
+        RemoteFileViewModel root = new RemoteFileViewModel(rootEntry)
         {
             IsExpanded = true,
             ChildrenLoaded = true
@@ -435,7 +434,7 @@ public class MainViewModel : ViewModelBase
 
         foreach (RemoteFileEntry child in _sftp.ListDirectory("/"))
         {
-            root.Children.Add(new RemoteItemViewModel(child, root));
+            root.Children.Add(new RemoteFileViewModel(child, root));
         }
 
         RemoteRoots.Add(root);
@@ -456,7 +455,7 @@ public class MainViewModel : ViewModelBase
         return new List<string>();
     }
 
-    private void RestoreRemoteExpansionRecursive(RemoteItemViewModel item, List<string> expandedPaths, int depth)
+    private void RestoreRemoteExpansionRecursive(RemoteFileViewModel item, List<string> expandedPaths, int depth)
     {
         if (depth > 20 || !expandedPaths.Contains(item.FullPath))
         {
@@ -472,7 +471,7 @@ public class MainViewModel : ViewModelBase
 
                 foreach (RemoteFileEntry child in children)
                 {
-                    item.Children.Add(new RemoteItemViewModel(child, item));
+                    item.Children.Add(new RemoteFileViewModel(child, item));
                 }
 
                 item.ChildrenLoaded = true;
@@ -480,7 +479,7 @@ public class MainViewModel : ViewModelBase
 
             item.IsExpanded = true;
 
-            foreach (RemoteItemViewModel child in item.Children.Where(x => x.IsDirectory))
+            foreach (RemoteFileViewModel child in item.Children.Where(x => x.IsDirectory))
             {
                 RestoreRemoteExpansionRecursive(child, expandedPaths, depth + 1);
             }
@@ -500,7 +499,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        RemoteItemViewModel? target = FindRemoteItemByPath(lastPath);
+        RemoteFileViewModel? target = FindRemoteItemByPath(lastPath);
 
         if (target == null)
         {
@@ -513,11 +512,11 @@ public class MainViewModel : ViewModelBase
         }, DispatcherPriority.Loaded);
     }
 
-    private RemoteItemViewModel? FindRemoteItemByPath(string path)
+    private RemoteFileViewModel? FindRemoteItemByPath(string path)
     {
-        foreach (RemoteItemViewModel root in RemoteRoots)
+        foreach (RemoteFileViewModel root in RemoteRoots)
         {
-            RemoteItemViewModel? found = FindRemoteItemRecursive(root, path);
+            RemoteFileViewModel? found = FindRemoteItemRecursive(root, path);
 
             if (found != null)
             {
@@ -528,16 +527,16 @@ public class MainViewModel : ViewModelBase
         return null;
     }
 
-    private RemoteItemViewModel? FindRemoteItemRecursive(RemoteItemViewModel item, string path)
+    private RemoteFileViewModel? FindRemoteItemRecursive(RemoteFileViewModel item, string path)
     {
         if (item.FullPath.Equals(path, StringComparison.OrdinalIgnoreCase))
         {
             return item;
         }
 
-        foreach (RemoteItemViewModel child in item.Children)
+        foreach (RemoteFileViewModel child in item.Children)
         {
-            RemoteItemViewModel? found = FindRemoteItemRecursive(child, path);
+            RemoteFileViewModel? found = FindRemoteItemRecursive(child, path);
 
             if (found != null)
             {
@@ -548,7 +547,7 @@ public class MainViewModel : ViewModelBase
         return null;
     }
 
-    public void OnRemoteItemExpanded(RemoteItemViewModel item)
+    public void OnRemoteItemExpanded(RemoteFileViewModel item)
     {
         if (!item.IsDirectory)
         {
@@ -564,7 +563,7 @@ public class MainViewModel : ViewModelBase
 
                 foreach (RemoteFileEntry child in children)
                 {
-                    item.Children.Add(new RemoteItemViewModel(child, item));
+                    item.Children.Add(new RemoteFileViewModel(child, item));
                 }
 
                 item.ChildrenLoaded = true;
@@ -586,7 +585,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public void OnRemoteItemCollapsed(RemoteItemViewModel item)
+    public void OnRemoteItemCollapsed(RemoteFileViewModel item)
     {
         List<string> expandedPaths = GetRemoteExpandedPaths();
         expandedPaths.RemoveAll(x => x.StartsWith(item.FullPath, StringComparison.OrdinalIgnoreCase));
@@ -599,7 +598,7 @@ public class MainViewModel : ViewModelBase
         SaveSettings();
     }
 
-    public void OnRemoteSelectionChanged(RemoteItemViewModel? item)
+    public void OnRemoteSelectionChanged(RemoteFileViewModel? item)
     {
         if (item == null)
         {
@@ -619,7 +618,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        List<RemoteItemViewModel> expandedDirectories = FlattenVisible()
+        List<RemoteFileViewModel> expandedDirectories = FlattenVisible()
             .Where(x => x.IsDirectory && x.ChildrenLoaded && x.IsExpanded)
             .ToList();
 
@@ -634,7 +633,7 @@ public class MainViewModel : ViewModelBase
         {
             try
             {
-                foreach (RemoteItemViewModel item in expandedDirectories)
+                foreach (RemoteFileViewModel item in expandedDirectories)
                 {
                     List<RemoteFileEntry> children;
 
@@ -668,10 +667,10 @@ public class MainViewModel : ViewModelBase
 
                         foreach (RemoteFileEntry child in children)
                         {
-                            item.Children.Add(new RemoteItemViewModel(child, item));
+                            item.Children.Add(new RemoteFileViewModel(child, item));
                         }
 
-                        foreach (RemoteItemViewModel child in item.Children)
+                        foreach (RemoteFileViewModel child in item.Children)
                         {
                             if (expandedChildPaths.Contains(child.FullPath))
                             {
@@ -704,7 +703,7 @@ public class MainViewModel : ViewModelBase
                 IsDrive = true
             };
 
-            LocalRoots.Add(new LocalItemViewModel(entry));
+            LocalRoots.Add(new LocalFileViewModel(entry));
         }
 
         RestoreLocalExpansion();
@@ -714,14 +713,14 @@ public class MainViewModel : ViewModelBase
     {
         HashSet<string> expandedPaths = _settings.ExpandedLocalPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (LocalItemViewModel root in LocalRoots)
+        foreach (LocalFileViewModel root in LocalRoots)
         {
             RestoreLocalExpansionRecursive(root, expandedPaths, 0);
         }
 
         if (!string.IsNullOrWhiteSpace(_settings.LastLocalFolderPath))
         {
-            LocalItemViewModel? last = FindLocalItemByPath(_settings.LastLocalFolderPath);
+            LocalFileViewModel? last = FindLocalItemByPath(_settings.LastLocalFolderPath);
 
             if (last != null && last.IsDirectory)
             {
@@ -730,7 +729,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private void RestoreLocalExpansionRecursive(LocalItemViewModel item, HashSet<string> expandedPaths, int depth)
+    private void RestoreLocalExpansionRecursive(LocalFileViewModel item, HashSet<string> expandedPaths, int depth)
     {
         if (depth > 10 || !expandedPaths.Contains(item.FullPath))
         {
@@ -748,7 +747,7 @@ public class MainViewModel : ViewModelBase
                 LastLocalFolder = item;
             }
 
-            foreach (LocalItemViewModel child in item.Children.Where(x => x.IsDirectory))
+            foreach (LocalFileViewModel child in item.Children.Where(x => x.IsDirectory))
             {
                 RestoreLocalExpansionRecursive(child, expandedPaths, depth + 1);
             }
@@ -758,11 +757,11 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private LocalItemViewModel? FindLocalItemByPath(string path)
+    private LocalFileViewModel? FindLocalItemByPath(string path)
     {
-        foreach (LocalItemViewModel root in LocalRoots)
+        foreach (LocalFileViewModel root in LocalRoots)
         {
-            LocalItemViewModel? found = FindLocalItemRecursive(root, path);
+            LocalFileViewModel? found = FindLocalItemRecursive(root, path);
 
             if (found != null)
             {
@@ -773,16 +772,16 @@ public class MainViewModel : ViewModelBase
         return null;
     }
 
-    private LocalItemViewModel? FindLocalItemRecursive(LocalItemViewModel item, string path)
+    private LocalFileViewModel? FindLocalItemRecursive(LocalFileViewModel item, string path)
     {
         if (item.FullPath.Equals(path, StringComparison.OrdinalIgnoreCase))
         {
             return item;
         }
 
-        foreach (LocalItemViewModel child in item.Children)
+        foreach (LocalFileViewModel child in item.Children)
         {
-            LocalItemViewModel? found = FindLocalItemRecursive(child, path);
+            LocalFileViewModel? found = FindLocalItemRecursive(child, path);
 
             if (found != null)
             {
@@ -793,7 +792,7 @@ public class MainViewModel : ViewModelBase
         return null;
     }
 
-    private void LoadLocalChildren(LocalItemViewModel item)
+    private void LoadLocalChildren(LocalFileViewModel item)
     {
         item.Children.Clear();
 
@@ -806,7 +805,7 @@ public class MainViewModel : ViewModelBase
                 IsDirectory = true
             };
 
-            item.Children.Add(new LocalItemViewModel(entry, item));
+            item.Children.Add(new LocalFileViewModel(entry, item));
         }
 
         foreach (string file in Directory.GetFiles(item.FullPath))
@@ -821,13 +820,13 @@ public class MainViewModel : ViewModelBase
                 Size = fileInfo.Length
             };
 
-            item.Children.Add(new LocalItemViewModel(entry, item));
+            item.Children.Add(new LocalFileViewModel(entry, item));
         }
 
         item.ChildrenLoaded = true;
     }
 
-    public void OnLocalItemExpanded(LocalItemViewModel item)
+    public void OnLocalItemExpanded(LocalFileViewModel item)
     {
         if (item.IsDirectory)
         {
@@ -859,26 +858,32 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public void OnLocalItemCollapsed(LocalItemViewModel item)
+    public void OnLocalItemCollapsed(LocalFileViewModel item)
     {
         _settings.ExpandedLocalPaths.RemoveAll(x => x.StartsWith(item.FullPath, StringComparison.OrdinalIgnoreCase));
         RemoveLocalWatcher(item.FullPath);
         SaveSettings();
     }
 
-    public void OnLocalSelectionChanged(LocalItemViewModel? item)
+    public void OnLocalSelectionChanged(LocalFileViewModel? item)
     {
-        _selectedLocalItem = item;
-
-        if (item != null && item.IsDirectory)
+        if (item != null)
         {
-            LastLocalFolder = item;
-            _settings.LastLocalFolderPath = item.FullPath;
+            if (item.IsDirectory || item.IsDrive)
+            {
+                LastLocalFolder = item;
+                _settings.LastLocalFolderPath = item.FullPath;
+            }
+            else if (item.LocalParent != null)
+            {
+                LastLocalFolder = item.LocalParent;
+                _settings.LastLocalFolderPath = item.LocalParent.FullPath;
+            }
             SaveSettings();
         }
     }
 
-    private void EnsureLocalWatcher(LocalItemViewModel item)
+    private void EnsureLocalWatcher(LocalFileViewModel item)
     {
         if (!item.IsDirectory || _localWatchers.ContainsKey(item.FullPath))
         {
@@ -917,7 +922,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private void OnLocalFileSystemChanged(LocalItemViewModel item)
+    private void OnLocalFileSystemChanged(LocalFileViewModel item)
     {
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -935,7 +940,7 @@ public class MainViewModel : ViewModelBase
 
                 LoadLocalChildren(item);
 
-                foreach (LocalItemViewModel child in item.Children)
+                foreach (LocalFileViewModel child in item.Children)
                 {
                     if (expandedChildPaths.Contains(child.FullPath))
                     {
@@ -954,7 +959,7 @@ public class MainViewModel : ViewModelBase
 
     // ---------- Remote selection / drag-drop ----------
 
-    public void OnRemoteMouseDown(RemoteItemViewModel? item, ModifierKeys modifiers)
+    public void OnRemoteMouseDown(RemoteFileViewModel? item, ModifierKeys modifiers)
     {
         if (item == null)
         {
@@ -986,27 +991,27 @@ public class MainViewModel : ViewModelBase
 
     private void ClearHighlight()
     {
-        foreach (RemoteItemViewModel root in RemoteRoots)
+        foreach (RemoteFileViewModel root in RemoteRoots)
         {
             SetHighlight(root, false);
         }
     }
 
-    private void SetHighlight(RemoteItemViewModel item, bool value)
+    private void SetHighlight(RemoteFileViewModel item, bool value)
     {
         item.IsHighlighted = value;
 
-        foreach (RemoteItemViewModel child in item.Children)
+        foreach (RemoteFileViewModel child in item.Children)
         {
             SetHighlight(child, value);
         }
     }
 
-    private List<RemoteItemViewModel> FlattenVisible()
+    private List<RemoteFileViewModel> FlattenVisible()
     {
-        List<RemoteItemViewModel> flattened = new List<RemoteItemViewModel>();
+        List<RemoteFileViewModel> flattened = new List<RemoteFileViewModel>();
 
-        foreach (RemoteItemViewModel root in RemoteRoots)
+        foreach (RemoteFileViewModel root in RemoteRoots)
         {
             Flatten(root, flattened);
         }
@@ -1014,19 +1019,19 @@ public class MainViewModel : ViewModelBase
         return flattened;
     }
 
-    private void Flatten(RemoteItemViewModel item, List<RemoteItemViewModel> output)
+    private void Flatten(RemoteFileViewModel item, List<RemoteFileViewModel> output)
     {
         output.Add(item);
 
-        foreach (RemoteItemViewModel child in item.Children)
+        foreach (RemoteFileViewModel child in item.Children)
         {
             Flatten(child, output);
         }
     }
 
-    private void SelectRange(RemoteItemViewModel clickedItem)
+    private void SelectRange(RemoteFileViewModel clickedItem)
     {
-        List<RemoteItemViewModel> flattened = FlattenVisible();
+        List<RemoteFileViewModel> flattened = FlattenVisible();
 
         int anchorIndex = _selectionAnchor == null ? -1 : flattened.IndexOf(_selectionAnchor);
         int clickedIndex = flattened.IndexOf(clickedItem);
@@ -1050,12 +1055,12 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public List<RemoteItemViewModel> GetHighlightedRemoteItems()
+    public List<RemoteFileViewModel> GetHighlightedRemoteItems()
     {
         return FlattenVisible().Where(x => x.IsHighlighted).ToList();
     }
 
-    public void HandleRemoteDrop(List<RemoteItemViewModel> items, LocalItemViewModel? target)
+    public void HandleRemoteDrop(List<RemoteFileViewModel> items, LocalFileViewModel? target)
     {
         if (target == null)
         {
@@ -1068,17 +1073,17 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        foreach (RemoteItemViewModel item in items)
+        foreach (RemoteFileViewModel item in items)
         {
             if (item.IsDirectory)
             {
-                DownloadItemViewModel placeholder = AddScanningPlaceholder(item, target);
+                TransferItemViewModel placeholder = AddScanningPlaceholder(item, target);
                 _ = ScanDirectoryInBackgroundAsync(item, target, placeholder);
             }
             else
             {
                 string localPath = Path.Combine(target.FullPath, item.Name);
-                StartDownload(item.Entry, localPath);
+                StartDownload(item.RemoteEntry, localPath);
             }
         }
 
@@ -1087,7 +1092,7 @@ public class MainViewModel : ViewModelBase
         SaveQueue();
     }
 
-    public void OnLocalMouseDown(LocalItemViewModel item, ModifierKeys modifiers)
+    public void OnLocalMouseDown(LocalFileViewModel item, ModifierKeys modifiers)
     {
         if (modifiers.HasFlag(ModifierKeys.Control))
         {
@@ -1112,27 +1117,27 @@ public class MainViewModel : ViewModelBase
 
     private void ClearLocalHighlight()
     {
-        foreach (LocalItemViewModel root in LocalRoots)
+        foreach (LocalFileViewModel root in LocalRoots)
         {
             SetLocalHighlight(root, false);
         }
     }
 
-    private void SetLocalHighlight(LocalItemViewModel item, bool value)
+    private void SetLocalHighlight(LocalFileViewModel item, bool value)
     {
         item.IsHighlighted = value;
 
-        foreach (LocalItemViewModel child in item.Children)
+        foreach (LocalFileViewModel child in item.Children)
         {
             SetLocalHighlight(child, value);
         }
     }
 
-    private List<LocalItemViewModel> FlattenLocalVisible()
+    private List<LocalFileViewModel> FlattenLocalVisible()
     {
-        List<LocalItemViewModel> flattened = new List<LocalItemViewModel>();
+        List<LocalFileViewModel> flattened = new List<LocalFileViewModel>();
 
-        foreach (LocalItemViewModel root in LocalRoots)
+        foreach (LocalFileViewModel root in LocalRoots)
         {
             FlattenLocal(root, flattened);
         }
@@ -1140,24 +1145,24 @@ public class MainViewModel : ViewModelBase
         return flattened;
     }
 
-    private void FlattenLocal(LocalItemViewModel item, List<LocalItemViewModel> output)
+    private void FlattenLocal(LocalFileViewModel item, List<LocalFileViewModel> output)
     {
         output.Add(item);
 
-        foreach (LocalItemViewModel child in item.Children)
+        foreach (LocalFileViewModel child in item.Children)
         {
             FlattenLocal(child, output);
         }
     }
 
-    public List<LocalItemViewModel> GetHighlightedLocalItems()
+    public List<LocalFileViewModel> GetHighlightedLocalItems()
     {
         return FlattenLocalVisible().Where(x => x.IsHighlighted).ToList();
     }
 
-    public void HandleLocalDrop(List<LocalItemViewModel> items, RemoteItemViewModel? target)
+    public void HandleLocalDrop(List<LocalFileViewModel> items, RemoteFileViewModel? target)
     {
-        RemoteItemViewModel? directory = target?.IsDirectory == true ? target : target?.Parent;
+        RemoteFileViewModel? directory = target?.IsDirectory == true ? target : target?.RemoteParent;
 
         if (directory == null)
         {
@@ -1165,7 +1170,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        foreach (LocalItemViewModel item in items)
+        foreach (LocalFileViewModel item in items)
         {
             if (item.IsDirectory)
             {
@@ -1186,7 +1191,7 @@ public class MainViewModel : ViewModelBase
                     Direction = TransferDirection.Upload
                 };
 
-                DownloadItemViewModel itemVm = new DownloadItemViewModel(entry);
+                TransferItemViewModel itemVm = new TransferItemViewModel(entry);
                 Downloads.Add(itemVm);
                 StartUpload(entry, itemVm, item.FullPath, remotePath);
             }
@@ -1197,7 +1202,7 @@ public class MainViewModel : ViewModelBase
         SaveQueue();
     }
 
-    private void UploadLocalDirectory(LocalItemViewModel directory, RemoteItemViewModel target)
+    private void UploadLocalDirectory(LocalFileViewModel directory, RemoteFileViewModel target)
     {
         try
         {
@@ -1222,7 +1227,7 @@ public class MainViewModel : ViewModelBase
                     Direction = TransferDirection.Upload
                 };
 
-                DownloadItemViewModel itemVm = new DownloadItemViewModel(entry);
+                TransferItemViewModel itemVm = new TransferItemViewModel(entry);
                 Downloads.Add(itemVm);
                 StartUpload(entry, itemVm, file, remotePath);
             }
@@ -1236,7 +1241,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private DownloadItemViewModel AddScanningPlaceholder(RemoteItemViewModel directory, LocalItemViewModel target)
+    private TransferItemViewModel AddScanningPlaceholder(RemoteFileViewModel directory, LocalFileViewModel target)
     {
         TransferEntry entry = new TransferEntry
         {
@@ -1248,7 +1253,7 @@ public class MainViewModel : ViewModelBase
             TotalLength = 0
         };
 
-        DownloadItemViewModel placeholder = new DownloadItemViewModel(entry, directory.Entry);
+        TransferItemViewModel placeholder = new TransferItemViewModel(entry, directory.RemoteEntry);
         Downloads.Add(placeholder);
 
         LogService.Info($"Queued directory for background scan: {directory.FullPath}");
@@ -1256,9 +1261,9 @@ public class MainViewModel : ViewModelBase
     }
 
     private async Task ScanDirectoryInBackgroundAsync(
-        RemoteItemViewModel directory,
-        LocalItemViewModel target,
-        DownloadItemViewModel placeholder)
+        RemoteFileViewModel directory,
+        LocalFileViewModel target,
+        TransferItemViewModel placeholder)
     {
         List<RemoteFileEntry> remoteFiles;
 
@@ -1325,7 +1330,7 @@ public class MainViewModel : ViewModelBase
             TotalLength = remoteFile.Size
         };
 
-        DownloadItemViewModel item = new DownloadItemViewModel(entry, remoteFile);
+        TransferItemViewModel item = new TransferItemViewModel(entry, remoteFile);
         Downloads.Add(item);
 
         _pendingQueue.Add(item);
@@ -1338,7 +1343,7 @@ public class MainViewModel : ViewModelBase
 
         while (_activeDownloadIds.Count < max && _pendingQueue.Count > 0)
         {
-            DownloadItemViewModel next = _pendingQueue[0];
+            TransferItemViewModel next = _pendingQueue[0];
             _pendingQueue.RemoveAt(0);
 
             if (next.IsFinished || Downloads.Contains(next) == false)
@@ -1355,7 +1360,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private async Task RunDownloadAsync(DownloadItemViewModel item, CancellationToken token)
+    private async Task RunDownloadAsync(TransferItemViewModel item, CancellationToken token)
     {
         try
         {
@@ -1392,7 +1397,7 @@ public class MainViewModel : ViewModelBase
 
     private void LoadPersistedDownloads()
     {
-        List<TransferEntry> persisted = DownloadQueueService.Load(_currentConnectionKey);
+        List<TransferEntry> persisted = TransferQueueService.Load(_currentConnectionKey);
         int restored = 0;
 
         foreach (TransferEntry entry in persisted)
@@ -1406,7 +1411,7 @@ public class MainViewModel : ViewModelBase
                 continue;
             }
 
-            DownloadItemViewModel item = new DownloadItemViewModel(entry);
+            TransferItemViewModel item = new TransferItemViewModel(entry);
             Downloads.Add(item);
             _pendingQueue.Add(item);
             restored++;
@@ -1434,7 +1439,7 @@ public class MainViewModel : ViewModelBase
 
             try
             {
-                DownloadQueueService.Save(connectionKey, snapshot);
+                TransferQueueService.Save(connectionKey, snapshot);
             }
             finally
             {
@@ -1449,7 +1454,7 @@ public class MainViewModel : ViewModelBase
     {
         bool changed = false;
 
-        foreach (DownloadItemViewModel item in Downloads.ToList())
+        foreach (TransferItemViewModel item in Downloads.ToList())
         {
             long completed = item.CompletedLength;
             long delta = completed - item.LastPollCompleted;
@@ -1477,7 +1482,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public void PauseDownload(DownloadItemViewModel item)
+    public void PauseDownload(TransferItemViewModel item)
     {
         if (item.Status.Equals("Queued", StringComparison.OrdinalIgnoreCase))
         {
@@ -1504,7 +1509,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public void ResumeDownload(DownloadItemViewModel item)
+    public void ResumeDownload(TransferItemViewModel item)
     {
         if (item.IsFinished)
         {
@@ -1544,7 +1549,7 @@ public class MainViewModel : ViewModelBase
         StartNextQueuedDownload();
     }
 
-    public void RemoveDownload(DownloadItemViewModel item)
+    public void RemoveDownload(TransferItemViewModel item)
     {
         _pendingQueue.Remove(item);
 
@@ -1584,9 +1589,9 @@ public class MainViewModel : ViewModelBase
 
     public void ClearQueue()
     {
-        List<DownloadItemViewModel> items = Downloads.ToList();
+        List<TransferItemViewModel> items = Downloads.ToList();
 
-        foreach (DownloadItemViewModel item in items)
+        foreach (TransferItemViewModel item in items)
         {
             _pendingQueue.Remove(item);
 
@@ -1600,7 +1605,7 @@ public class MainViewModel : ViewModelBase
 
         Downloads.Clear();
 
-        foreach (DownloadItemViewModel item in items)
+        foreach (TransferItemViewModel item in items)
         {
             string localPath = item.LocalPath;
 
@@ -1636,11 +1641,11 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        List<DownloadItemViewModel> items = selectedItems
-            .OfType<DownloadItemViewModel>()
+        List<TransferItemViewModel> items = selectedItems
+            .OfType<TransferItemViewModel>()
             .ToList();
 
-        foreach (DownloadItemViewModel item in items)
+        foreach (TransferItemViewModel item in items)
         {
             RemoveDownload(item);
         }
@@ -1648,7 +1653,7 @@ public class MainViewModel : ViewModelBase
 
     private void PauseAll()
     {
-        foreach (DownloadItemViewModel item in Downloads.Where(x => x.CanPause).ToList())
+        foreach (TransferItemViewModel item in Downloads.Where(x => x.CanPause).ToList())
         {
             PauseDownload(item);
         }
@@ -1656,7 +1661,7 @@ public class MainViewModel : ViewModelBase
 
     private void ResumeAll()
     {
-        foreach (DownloadItemViewModel item in Downloads.Where(x => x.CanResume).ToList())
+        foreach (TransferItemViewModel item in Downloads.Where(x => x.CanResume).ToList())
         {
             ResumeDownload(item);
         }
@@ -1664,9 +1669,9 @@ public class MainViewModel : ViewModelBase
 
     // ---------- Local item operations ----------
 
-    public void NewFolder(LocalItemViewModel item)
+    public void NewFolder(LocalFileViewModel item)
     {
-        LocalItemViewModel folder = item.IsDirectory ? item : item.Parent ?? item;
+        LocalFileViewModel folder = item.IsDirectory ? item : item.LocalParent ?? item;
 
         if (!folder.IsDirectory)
         {
@@ -1699,7 +1704,7 @@ public class MainViewModel : ViewModelBase
                     IsDirectory = true
                 };
 
-                folder.Children.Insert(0, new LocalItemViewModel(entry, folder));
+                folder.Children.Insert(0, new LocalFileViewModel(entry, folder));
             }
         }
         catch (Exception ex)
@@ -1709,7 +1714,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public void DeleteLocalItem(LocalItemViewModel item)
+    public void DeleteLocalItem(LocalFileViewModel item)
     {
         if (item.IsDrive)
         {
@@ -1734,7 +1739,7 @@ public class MainViewModel : ViewModelBase
 
         try
         {
-            LocalItemViewModel? parent = item.Parent;
+            LocalFileViewModel? parent = item.LocalParent;
 
             if (item.IsDirectory)
             {
@@ -1761,7 +1766,7 @@ public class MainViewModel : ViewModelBase
 
     public void DeleteRemoteItems(IList? items)
     {
-        List<RemoteItemViewModel> remoteItems = items?.OfType<RemoteItemViewModel>().ToList() ?? new List<RemoteItemViewModel>();
+        List<RemoteFileViewModel> remoteItems = items?.OfType<RemoteFileViewModel>().ToList() ?? new List<RemoteFileViewModel>();
 
         if (remoteItems.Count == 0)
         {
@@ -1777,7 +1782,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        foreach (RemoteItemViewModel item in remoteItems.ToList())
+        foreach (RemoteFileViewModel item in remoteItems.ToList())
         {
             try
             {
@@ -1800,7 +1805,7 @@ public class MainViewModel : ViewModelBase
 
     public void DeleteLocalItems(IList? items)
     {
-        List<LocalItemViewModel> localItems = items?.OfType<LocalItemViewModel>().Where(x => !x.IsDrive).ToList() ?? new List<LocalItemViewModel>();
+        List<LocalFileViewModel> localItems = items?.OfType<LocalFileViewModel>().Where(x => !x.IsDrive).ToList() ?? new List<LocalFileViewModel>();
 
         if (localItems.Count == 0)
         {
@@ -1816,7 +1821,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        foreach (LocalItemViewModel item in localItems.ToList())
+        foreach (LocalFileViewModel item in localItems.ToList())
         {
             try
             {
@@ -1844,9 +1849,9 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private void UploadToRemote(RemoteItemViewModel target)
+    private void UploadToRemote(RemoteFileViewModel target)
     {
-        RemoteItemViewModel? directory = target.IsDirectory ? target : target.Parent;
+        RemoteFileViewModel? directory = target.IsDirectory ? target : target.RemoteParent;
 
         if (directory == null)
         {
@@ -1880,7 +1885,7 @@ public class MainViewModel : ViewModelBase
                 Direction = TransferDirection.Upload
             };
 
-            DownloadItemViewModel itemVm = new DownloadItemViewModel(entry);
+            TransferItemViewModel itemVm = new TransferItemViewModel(entry);
             Downloads.Add(itemVm);
             StartUpload(entry, itemVm, localPath, remotePath);
         }
@@ -1888,7 +1893,7 @@ public class MainViewModel : ViewModelBase
 
     private void StartUpload(
         TransferEntry entry,
-        DownloadItemViewModel itemVm,
+        TransferItemViewModel itemVm,
         string localPath,
         string remotePath,
         bool resume = false)
@@ -1982,9 +1987,9 @@ public class MainViewModel : ViewModelBase
         }, cts.Token);
     }
 
-    private void NewRemoteFolder(RemoteItemViewModel target)
+    private void NewRemoteFolder(RemoteFileViewModel target)
     {
-        RemoteItemViewModel? parent = target.IsDirectory ? target : target.Parent;
+        RemoteFileViewModel? parent = target.IsDirectory ? target : target.RemoteParent;
 
         if (parent == null)
         {
@@ -2011,7 +2016,7 @@ public class MainViewModel : ViewModelBase
 
                 if (newEntry != null)
                 {
-                    parent.Children.Insert(0, new RemoteItemViewModel(newEntry, parent));
+                    parent.Children.Insert(0, new RemoteFileViewModel(newEntry, parent));
                 }
                 else
                 {
@@ -2032,7 +2037,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private void DeleteRemoteItem(RemoteItemViewModel item)
+    private void DeleteRemoteItem(RemoteFileViewModel item)
     {
         string message;
 
@@ -2054,7 +2059,7 @@ public class MainViewModel : ViewModelBase
         {
             _sftp.DeleteDirectory(item.FullPath);
 
-            RemoteItemViewModel? parent = item.Parent;
+            RemoteFileViewModel? parent = item.RemoteParent;
 
             if (parent != null)
             {
@@ -2070,7 +2075,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private void RefreshRemoteChildren(RemoteItemViewModel item)
+    private void RefreshRemoteChildren(RemoteFileViewModel item)
     {
         try
         {
@@ -2079,7 +2084,7 @@ public class MainViewModel : ViewModelBase
 
             foreach (RemoteFileEntry child in children)
             {
-                item.Children.Add(new RemoteItemViewModel(child, item));
+                item.Children.Add(new RemoteFileViewModel(child, item));
             }
 
             item.ChildrenLoaded = true;
