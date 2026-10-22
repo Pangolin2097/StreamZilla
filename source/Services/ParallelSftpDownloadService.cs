@@ -106,6 +106,14 @@ public sealed class ParallelSftpDownloadService
             LogService.Error($"Download failed for {remoteFile.FullPath}: {ex.Message}");
             throw;
         }
+        finally
+        {
+            foreach (SftpClient client in clients)
+            {
+                client.Disconnect();
+                client.Dispose();
+            }
+        }
 
         if (!token.IsCancellationRequested)
         {
