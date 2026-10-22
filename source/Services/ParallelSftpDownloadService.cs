@@ -110,7 +110,11 @@ public sealed class ParallelSftpDownloadService
         {
             foreach (SftpClient client in clients)
             {
-                client.Disconnect();
+                try
+                {
+                    client.Disconnect();
+                }
+                catch { }
                 client.Dispose();
             }
         }
@@ -179,66 +183,51 @@ public sealed class ParallelSftpDownloadService
     {
         return Task.Run(async () =>
         {
-            try
+            using (Stream remote = client.OpenRead(remotePath))
             {
-                using (Stream remote = client.OpenRead(remotePath))
+                remote.Seek(start, SeekOrigin.Begin);
+
+                using (FileStream local = new FileStream(tempPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
                 {
-                    remote.Seek(start, SeekOrigin.Begin);
+                    local.Seek(start, SeekOrigin.Begin);
 
-                    using (FileStream local = new FileStream(tempPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite))
+                    long position = start;
+                    long chunkWritten = entry.ChunkBytes[chunkIndex];
+                    long lastNotified = Environment.TickCount64;
+
+                    if (chunkWritten > 0)
                     {
-                        local.Seek(start, SeekOrigin.Begin);
+                        position += chunkWritten;
+                        remote.Seek(position, SeekOrigin.Begin);
+                        local.Seek(position, SeekOrigin.Begin);
+                    }
 
-                        long position = start;
-                        long chunkWritten = entry.ChunkBytes[chunkIndex];
-                        long lastNotified = Environment.TickCount64;
+                    while (position <= end)
+                    {
+                        token.ThrowIfCancellationRequested();
 
-                        if (chunkWritten > 0)
+                        int toRead = (int)Math.Min(buffer.Length, end - position + 1);
+                        int read = remote.Read(buffer, 0, toRead);
+
+                        if (read <= 0)
                         {
-                            position += chunkWritten;
-                            remote.Seek(position, SeekOrigin.Begin);
-                            local.Seek(position, SeekOrigin.Begin);
+                            break;
                         }
 
-                        while (position <= end)
+                        local.Write(buffer, 0, read);
+                        position += read;
+                        chunkWritten += read;
+
+                        entry.SetChunkBytes(chunkIndex, chunkWritten);
+
+                        long now = Environment.TickCount64;
+                        if (now - lastNotified >= ProgressIntervalMilliseconds || position > end)
                         {
-                            token.ThrowIfCancellationRequested();
-
-                            int toRead = (int)Math.Min(buffer.Length, end - position + 1);
-                            int read = remote.Read(buffer, 0, toRead);
-
-                            if (read <= 0)
-                            {
-                                break;
-                            }
-
-                            local.Write(buffer, 0, read);
-                            position += read;
-                            chunkWritten += read;
-
-                            entry.SetChunkBytes(chunkIndex, chunkWritten);
-
-                            long now = Environment.TickCount64;
-                            if (now - lastNotified >= ProgressIntervalMilliseconds || position > end)
-                            {
-                                lastNotified = now;
-                                OnProgress?.Invoke(entry.CompletedLength);
-                            }
+                            lastNotified = now;
+                            OnProgress?.Invoke(entry.CompletedLength);
                         }
                     }
                 }
-            }
-            finally
-            {
-                try
-                {
-                    client.Disconnect();
-                }
-                catch
-                {
-                }
-
-                client.Dispose();
             }
         }, token);
     }
